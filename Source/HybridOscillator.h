@@ -116,14 +116,10 @@ class HDTable {
     const float* frame(int band,int f)const{return data.data()+(size_t(band)*hdFrames+f)*(tableSize+1);}
 public:
     static constexpr size_t bytes=size_t(tableBands)*hdFrames*(tableSize+1)*sizeof(float);
-    HDTable():data(bytes/sizeof(float)){
-        for(int b=0;b<tableBands;++b)for(int f=0;f<hdFrames;++f){
-            double delta=.47/double(1<<b)*.999999;
-            auto* a=frame(b,f);
-            for(int i=0;i<tableSize;++i)a[i]=waveBank().read(double(i)/tableSize,float(f)/(hdFrames-1),delta);
-            a[tableSize]=a[0];
-        }
-    }
+    // The 256 factory frame grid is exactly 17 subdivisions of each legacy
+    // interval (255 = 15 * 17), so linear interpolation needs no duplicate table.
+    HDTable()=default;
+    size_t allocatedBytes()const noexcept{return data.capacity()*sizeof(float);}
     explicit HDTable(const std::vector<float>& samples):data(bytes/sizeof(float)){
         if(samples.size()<tableSize||samples.size()%tableSize||samples.size()>size_t(hdFrames)*tableSize)throw std::invalid_argument("Wavetable length");
         int frames=int(samples.size()/tableSize);
@@ -149,6 +145,7 @@ public:
         }
     }
     float read(double phase,float morph,double delta)const noexcept{
+        if(data.empty())return waveBank().read(phase,morph,delta);
         int b=0;double limit=.47/std::max(delta,1.e-12);
         while(b+1<tableBands&&double(1<<(b+1))<=limit)++b;
         float q=std::clamp(morph,0.f,1.f)*(hdFrames-1);
@@ -229,7 +226,7 @@ inline float renderHybrid(HybridVoice& v,const OscParams& o,const SampleData* sa
         }
         const double dt=std::clamp(base*std::exp2((spread*o.detune+drift)/1200.),0.,.45);
         if(o.sync&&reset)v.phase[u]=0;
-        float m=float(std::sin(2*hpi*v.mod[u])),x=0;
+        float m=(o.mode==OscMode::fm||o.mode==OscMode::am||o.ring)?float(std::sin(2*hpi*v.mod[u])):0.f,x=0;
         switch(o.mode){
             case OscMode::wavetable:x=readTable(o,v.phase[u],dt);break;
             case OscMode::fm:x=float(std::sin(2*hpi*v.phase[u]+double(o.depth)*6.*m));break;

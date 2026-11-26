@@ -75,6 +75,7 @@ int main(){
  }
  {
   const auto& hd=cosmos::hdBank();
+  check(hd.allocatedBytes()==0,"factory HD duplicate storage eliminated");
   for(float m:{0.f,.2f,.4f,.6f,.8f,1.f})for(int i=0;i<128;++i){
     double phase=i/128.;float a=hd.read(phase,m,.001),b=cosmos::waveBank().read(phase,m,.001);
     check(std::isfinite(a)&&std::abs(a-b)<.025f,"HD legacy interpolation");

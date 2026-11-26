@@ -4,17 +4,39 @@
 #elif defined(__SSE2__) || defined(_M_X64)
  #include <emmintrin.h>
 #endif
+#if defined(COSMOS_AVX2_DISPATCH) && defined(_M_X64)
+ #include <intrin.h>
+#endif
 namespace cosmos {
+#if defined(COSMOS_AVX2_DISPATCH) && defined(_M_X64)
+void advancePhasesAVX2(double*,const double*,int) noexcept;
+inline bool hasAVX2() noexcept {
+    static const bool supported=[](){
+        int regs[4]{};__cpuid(regs,0);if(regs[0]<7)return false;
+        __cpuidex(regs,1,0);
+        constexpr int required=(1<<27)|(1<<28);
+        if((regs[2]&required)!=required)return false;
+        if((_xgetbv(0)&6)!=6)return false;
+        __cpuidex(regs,7,0);return (regs[1]&(1<<5))!=0;
+    }();return supported;
+}
+#else
+inline bool hasAVX2() noexcept{return false;}
+#endif
+
 inline const char* phaseBackend() noexcept {
 #if defined(__aarch64__)
  return "NEON";
 #elif defined(__SSE2__) || defined(_M_X64)
- return "SSE2";
+ return hasAVX2()?"AVX2":"SSE2";
 #else
  return "scalar";
 #endif
 }
 inline void advancePhases(double* phase,const double* delta,int n) noexcept {
+#if defined(COSMOS_AVX2_DISPATCH) && defined(_M_X64)
+ if(hasAVX2()){advancePhasesAVX2(phase,delta,n);return;}
+#endif
  int i=0;
 #if defined(__aarch64__)
  const auto one=vdupq_n_f64(1.);

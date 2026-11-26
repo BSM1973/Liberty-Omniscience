@@ -1,3 +1,3 @@
-# Liberty Omniscience — v0.3.2 COSMOS ENGINE OPTIMIZATION (candidat)
+# Liberty Omniscience — v0.3.3 COSMOS ENGINE FINAL CONTROL (candidat)
 
-Préparation des paramètres hors boucle audio, unisson wavetable groupé expérimental, NEON/SSE2, comparaison A/B et tests de durée. Le chemin groupé n'est pas activé dans le plugin. Voir [roadmap](docs/ROADMAP.md).
+AVX2 dispatch expérimental, mémoire HD d'usine optimisée, contrôles automatisés des 200 presets et de la restauration d'état. Le chemin groupé demeure désactivé dans le plugin. Voir [roadmap](docs/ROADMAP.md) pour les limites et la référence CPU mesurée.

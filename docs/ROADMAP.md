@@ -45,3 +45,9 @@ Le correctif Windows v0.3 (pool fixe sur le tas) et son test de saturation sont 
 ## v0.3.2 — COSMOS ENGINE OPTIMIZATION (candidate)
 - Hoist oscillator preparation and sample-source resolution outside the sample loop. Optional grouped wavetable unison path caches increments, uses ARM64 NEON or x64 SSE2 phase update; scalar fallback. Grouped path remains disabled in plugin, only enabled by benchmark/test. No AVX2 implementation yet.
 - Full-engine scalar/grouped A/B test including pitch bend. Short CPU benchmark on 1/8/32 voices, endurance 60 seconds of rendered audio for 32-voice granular and grouped HD. Results not available until CI; no realtime guarantee. HD memory compression, preset listening, host automation and graphical validation remain pending.
+
+## v0.3.3 — COSMOS ENGINE FINAL CONTROL (candidate)
+- Baseline v0.3.1: at 48 kHz/128, 32 notes/20 oscillators, HD unison x16 1999.72% macOS and 5261.01% Windows, granular 264.457%/378.453%, analog 125.015%/108.983%. Percent of block deadline, not OS CPU usage. Not real-time capable under this stress case.
+- AVX2 phase kernel isolated in its own translation unit, runtime CPUID + OSXSAVE/XGETBV, fallback SSE2. NEON retained. Experimental grouped path remains off in plugin pending validated benchmarks.
+- Factory HD virtual grid removes redundant 16,785,408-byte allocation (255 intervals align with 15 legacy intervals); imported tables still use full band storage. Skip unused modulator sine.
+- Processor QA renders every one of 200 presets to stereo PCM WAV, measures RMS/peak/finite and compares audio after state roundtrip with automated master value. This is not listening or real DAW validation. Host automation across DAWs, imported paths, full aliasing analysis, visual validation and further CPU optimization remain pending.
