@@ -27,6 +27,20 @@ jobs:
         run: cmake --build build --config Release --parallel 3
       - name: DSP tests
         run: ctest --test-dir build -C Release --output-on-failure
+      - name: DSP benchmark
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            ./build/Release/CosmosBenchmark.exe > cosmos-benchmark.csv
+          else
+            ./build/CosmosBenchmark > cosmos-benchmark.csv
+          fi
+          cat cosmos-benchmark.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cosmos-benchmark-${{ matrix.name }}
+          path: cosmos-benchmark.csv
+          if-no-files-found: error
       - name: Package macOS development binaries
         if: runner.os == 'macOS'
         shell: bash
@@ -56,12 +70,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
         with:
-          name: Omniscience-v0.3-macOS-ARM64
+          name: Omniscience-v0.3.1-macOS-ARM64
           path: Omniscience-macOS-ARM64.zip
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
-          name: Omniscience-v0.3-Windows-x64
+          name: Omniscience-v0.3.1-Windows-x64
           path: Omniscience-Windows-x64.zip
           if-no-files-found: error

@@ -5,6 +5,8 @@
 #include <numbers>
 #include <vector>
 #include <cstdint>
+#include <complex>
+#include <stdexcept>
 #include "GranularEngine.h"
 
 namespace cosmos {
@@ -34,12 +36,15 @@ inline const std::array<SampleData,4>& factoryGrains(){
         return result;
     }();return bank;
 }
+class HDTable;
 struct OscParams {
     OscMode mode=OscMode::analog;
     int wave=0, unison=1;
     float level=0, tune=0, detune=0, drift=0, morph=0, ratio=2, depth=0, drive=0;
     bool sync=false, ring=false;
     GrainParams grain{};
+    int tableSource=0;
+    const HDTable* userTable=nullptr;
 };
 inline double wrap(double x) noexcept {return x-std::floor(x);}
 inline float wavetableHarmonic(int frame,int n) noexcept {
@@ -83,6 +88,80 @@ public:
     }
 };
 inline const WavetableBank& waveBank(){static const WavetableBank bank;return bank;}
+constexpr int hdFrames=256;
+class HDTable {
+    std::vector<float> data;
+    using Complex=std::complex<double>;
+    static void fft(std::array<Complex,tableSize>& a,bool inverse){
+        for(unsigned i=1,j=0;i<tableSize;++i){
+            unsigned bit=tableSize/2;
+            for(;j&bit;bit>>=1)j^=bit;
+            j^=bit;if(i<j)std::swap(a[i],a[j]);
+        }
+        for(unsigned len=2;len<=tableSize;len*=2){
+            auto w0=std::polar(1.,(inverse?2.:-2.)*hpi/len);
+            for(unsigned i=0;i<tableSize;i+=len){
+                Complex w=1.;
+                for(unsigned j=0;j<len/2;++j){
+                    auto u=a[i+j],v=a[i+j+len/2]*w;
+                    a[i+j]=u+v;a[i+j+len/2]=u-v;w*=w0;
+                }
+            }
+        }
+        if(inverse)for(auto& x:a)x/=tableSize;
+    }
+    float* frame(int band,int f){return data.data()+(size_t(band)*hdFrames+f)*(tableSize+1);}
+    const float* frame(int band,int f)const{return data.data()+(size_t(band)*hdFrames+f)*(tableSize+1);}
+public:
+    static constexpr size_t bytes=size_t(tableBands)*hdFrames*(tableSize+1)*sizeof(float);
+    HDTable():data(bytes/sizeof(float)){
+        for(int b=0;b<tableBands;++b)for(int f=0;f<hdFrames;++f){
+            double delta=.47/double(1<<b)*.999999;
+            auto* a=frame(b,f);
+            for(int i=0;i<tableSize;++i)a[i]=waveBank().read(double(i)/tableSize,float(f)/(hdFrames-1),delta);
+            a[tableSize]=a[0];
+        }
+    }
+    explicit HDTable(const std::vector<float>& samples):data(bytes/sizeof(float)){
+        if(samples.size()<tableSize||samples.size()%tableSize||samples.size()>size_t(hdFrames)*tableSize)throw std::invalid_argument("Wavetable length");
+        int frames=int(samples.size()/tableSize);
+        std::vector<std::array<Complex,tableSize>> spectra(static_cast<size_t>(frames));
+        for(int f=0;f<frames;++f){
+            auto& a=spectra[size_t(f)];
+            for(int i=0;i<tableSize;++i){float x=samples[size_t(f)*tableSize+i];a[size_t(i)]=std::isfinite(x)?std::clamp(x,-1.f,1.f):0.f;}
+            fft(a,false);a[0]=0;
+        }
+        for(int f=0;f<hdFrames;++f){
+            double q=double(f)*(frames-1)/(hdFrames-1);
+            int lo=int(q),hi=std::min(lo+1,frames-1);double mix=q-lo;
+            for(int b=0;b<tableBands;++b){
+                std::array<Complex,tableSize> a{};int harmonics=1<<b;
+                for(int k=1;k<=harmonics;++k){
+                    a[size_t(k)]=spectra[size_t(lo)][size_t(k)]*(1.-mix)+spectra[size_t(hi)][size_t(k)]*mix;
+                    a[tableSize-size_t(k)]=std::conj(a[size_t(k)]);
+                }
+                fft(a,true);auto* out=frame(b,f);
+                for(int i=0;i<tableSize;++i)out[i]=float(a[size_t(i)].real());
+                out[tableSize]=out[0];
+            }
+        }
+    }
+    float read(double phase,float morph,double delta)const noexcept{
+        int b=0;double limit=.47/std::max(delta,1.e-12);
+        while(b+1<tableBands&&double(1<<(b+1))<=limit)++b;
+        float q=std::clamp(morph,0.f,1.f)*(hdFrames-1);
+        int f=std::min(int(q),hdFrames-2);double p=wrap(phase)*tableSize;
+        int i=std::min(int(p),tableSize-1);float frac=float(p-i);
+        auto* a=frame(b,f);auto* c=frame(b,f+1);
+        return std::lerp(std::lerp(a[i],a[i+1],frac),std::lerp(c[i],c[i+1],frac),q-f);
+    }
+};
+inline const HDTable& hdBank(){static const HDTable bank;return bank;}
+inline float readTable(const OscParams& o,double phase,double delta) noexcept {
+    if(o.tableSource==2)return o.userTable?o.userTable->read(phase,o.morph,delta):0.f;
+    if(o.tableSource==1)return hdBank().read(phase,o.morph,delta);
+    return waveBank().read(phase,o.morph,delta);
+}
 struct HybridVoice {
     std::array<double,maxUnison> phase{}, mod{}, samplePos{}, driftPhase{};
     double syncPhase=0;
@@ -130,7 +209,7 @@ inline float renderHybrid(HybridVoice& v,const OscParams& o,const SampleData* sa
         if(o.sync&&reset)v.phase[u]=0;
         float m=float(std::sin(2*hpi*v.mod[u])),x=0;
         switch(o.mode){
-            case OscMode::wavetable:x=waveBank().read(v.phase[u],o.morph,dt);break;
+            case OscMode::wavetable:x=readTable(o,v.phase[u],dt);break;
             case OscMode::fm:x=float(std::sin(2*hpi*v.phase[u]+double(o.depth)*6.*m));break;
             case OscMode::am:x=analog(o.wave,v.phase[u],dt)*(1.f-o.depth*.5f+o.depth*.5f*m);break;
             case OscMode::sample:

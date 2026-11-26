@@ -1,3 +1,3 @@
-# Liberty Omniscience — v0.3 DEEP GRANULAR (candidat)
+# Liberty Omniscience — v0.3.1 DEEP GRANULAR PERFECTION (candidat)
 
-Mode granulaire par oscillateur, réglages et télémétrie, quatre sources d'usine synthétiques, 200 patches paramétriques, moteur hybride v0.2 conservé. Voir [roadmap](docs/ROADMAP.md) pour limites et validation. Pas d'installateur commercial.
+Édition graphique de boucle, wavetables HD 256 × 2048, import WAV, tests spectraux et benchmark CPU. Voir [roadmap](docs/ROADMAP.md) pour les limites et la validation. Pas d'installateur commercial.

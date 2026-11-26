@@ -68,7 +68,7 @@ class Engine {
     std::array<bool,16> pedal{};
     std::array<float,16> bend{};
 public:
-    void prepare(double rate) noexcept {sr=std::max(8000.,rate);(void)waveBank();(void)factoryGrains();reset();}
+    void prepare(double rate) noexcept {sr=std::max(8000.,rate);(void)waveBank();(void)hdBank();(void)factoryGrains();reset();}
     void reset() noexcept {for(auto& voice:v)voice=Voice{};pedal={};bend={};counter=0;}
     void noteOn(int ch,int note,float velocity) noexcept {
       if(ch<0||ch>=16)return;

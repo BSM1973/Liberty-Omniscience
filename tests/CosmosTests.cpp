@@ -15,6 +15,7 @@ int main(){
   e.reset();std::fill(l.begin(),l.end(),0);std::fill(r.begin(),r.end(),0);e.render(l.data(),r.data(),128,p);
   check(std::all_of(l.begin(),l.end(),[](float x){return x==0;}),"voice pool reset silence");
  }
+
  for(double sr:{44100.,48000.,96000.}){
   cosmos::Engine e;e.prepare(sr);cosmos::Patch p;
   for(int k=0;k<4;++k){p.layer[k].wave=k;p.layer[k].release=.04f;}
@@ -71,5 +72,17 @@ int main(){
   e.reset();std::fill(l.begin(),l.end(),0);std::fill(r.begin(),r.end(),0);o.grain.source=0;
   e.noteOn(0,60,1);e.render(l.data(),r.data(),4096,p);check(std::all_of(l.begin(),l.end(),[](float x){return x==0;}),"granular missing sample silence");
  }
- std::cout<<"Cosmos foundation, hybrid and granular tests passed\n";
+ {
+  const auto& hd=cosmos::hdBank();
+  for(float m:{0.f,.2f,.4f,.6f,.8f,1.f})for(int i=0;i<128;++i){
+    double phase=i/128.;float a=hd.read(phase,m,.001),b=cosmos::waveBank().read(phase,m,.001);
+    check(std::isfinite(a)&&std::abs(a-b)<.025f,"HD legacy interpolation");
+  }
+  std::vector<float> cycle(cosmos::tableSize);
+  for(int i=0;i<cosmos::tableSize;++i)cycle[size_t(i)]=float(.7*std::sin(2*cosmos::hpi*i/cosmos::tableSize)+.2*std::sin(2*cosmos::hpi*64*i/cosmos::tableSize));
+  cosmos::HDTable user(cycle);
+  double err=0;for(int i=0;i<cosmos::tableSize;++i){double phase=double(i)/cosmos::tableSize;double d=user.read(phase,.5f,.1)-.7*std::sin(2*cosmos::hpi*phase);err+=d*d;}
+  check(std::sqrt(err/cosmos::tableSize)<.01,"band limiting high harmonics");
+ }
+ std::cout<<"Cosmos foundation, hybrid, granular and HD tests passed\n";
 }

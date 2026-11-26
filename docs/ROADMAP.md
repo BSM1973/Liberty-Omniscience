@@ -34,5 +34,10 @@ Les objectifs de 20 oscillateurs, 70 filtres, 100 effets, 64 slots de modulation
 - 4 sources d'usine synthétiques originales; 100 patches paramétriques granulaires supplémentaires à écouter et différencier; 200 au total. Import WAV/AIFF conservé.
 - Limites : pas encore d'édition des boucles par glisser sur la forme d'onde, import wavetable utilisateur, extension 256 formes, SIMD NEON/AVX2 ni benchmarks temps réel. Ces éléments restent à réaliser. Pas de parité garantie avec la référence. Les tests et la compilation de ce candidat restent à lancer après validation v0.2.
 
-### Correctif v0.3 Windows
-Le build Windows compilait mais CosmosFoundation terminait en SEGFAULT. Cause probable : taille du pool de voix granulaire sur la pile. Pool fixe préalloué sur le tas dès la construction; aucune allocation dans noteOn, reset ou render. Tests historiques conservés, test de saturation/réinitialisation ajouté. Confirmation par CI requise.
+## v0.3.1 — DEEP GRANULAR PERFECTION (candidat)
+- Édition des marqueurs de boucle à la souris, automation et gestes hôte.
+- Table HD 256 × 2048, 8 bandes (1 à 128 harmoniques), expansion de la table historique, mode historique conservé par défaut pour compatibilité. Import WAV de 1 à 256 cycles de 2048, interpolation spectrale et FFT hors thread audio, downmix stéréo, table partagée par couche, huit imports maximum par session. Chemin externe sauvegardé; fichier absent = silence en mode personnel.
+- Tests de proximité HD/historique et d'atténuation harmonique, benchmark 48 kHz/128, 1/8/32 notes et 20 oscillateurs; temps moyen/max, taille statique et niveau brut. Pas de validation temps réel garantie, pas de mesure RSS ni de test d'écoute des 200 presets.
+- SIMD NEON/SSE2/AVX2 non activé ni implémenté, contrôle DAW et visuel restant. Aucun résultat de compilation ni de benchmark acquis avant exécution CI.
+
+Le correctif Windows v0.3 (pool fixe sur le tas) et son test de saturation sont repris de 125812e1.
