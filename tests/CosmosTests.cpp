@@ -104,5 +104,29 @@ int main(){
   }
   check(ref>0&&std::sqrt(err/ref)<1e-5&&peak<1e-4f,"grouped engine equivalence");
  }
- std::cout<<"Cosmos foundation, hybrid, granular, HD and grouped A/B tests passed\n";
+ {
+  cosmos::Engine scalar,tiled;scalar.prepare(48000);tiled.prepare(48000);
+  cosmos::Patch a;
+  for(auto& layer:a.layer){layer.release=.015f;for(auto& o:layer.osc){o.mode=cosmos::OscMode::wavetable;o.tableSource=1;o.level=.2f;o.unison=16;o.detune=23;o.morph=.43f;}}
+  auto b=a;b.experimentalGrouped=true;b.experimentalTiled=true;
+  for(int i=0;i<8;++i){scalar.noteOn(0,48+i,.7f);tiled.noteOn(0,48+i,.7f);}
+  std::vector<float> l(137),r(137),ll(137),rr(137);double err=0,ref=0;float peak=0;
+  for(int block=0;block<64;++block){
+    int n=block%2?137:19;
+    for(auto* v:{&l,&r,&ll,&rr})std::fill(v->begin(),v->end(),0.f);
+    if(block==16){scalar.pitch(0,10000);tiled.pitch(0,10000);}
+    if(block==24){a.layer[0].osc[0].morph=.77f;b.layer[0].osc[0].morph=.77f;}
+    if(block==32)for(int i=0;i<8;++i){scalar.noteOff(0,48+i);tiled.noteOff(0,48+i);}
+    scalar.render(l.data(),r.data(),n,a);tiled.render(ll.data(),rr.data(),n,b);
+    for(int i=0;i<n;++i)for(auto pair:{std::pair<float,float>{l[i],ll[i]},std::pair<float,float>{r[i],rr[i]}}){
+      double d=pair.first-pair.second;err+=d*d;ref+=double(pair.first)*pair.first;peak=std::max(peak,std::abs(pair.first-pair.second));
+    }
+  }
+  check(ref>0&&std::sqrt(err/ref)<1e-5&&peak<1e-4f,"tiled engine equivalence");
+  for(double lo:{0.,.125,123.45})for(double length:{1.,3.5,47892.1})for(double x:{-100000.,-1.,0.,1.,123.45,48000.,100000.}){
+    double y=std::fmod(x-lo,length);double reference=lo+(y<0?y+length:y);
+    check(std::abs(cosmos::grainWrap(x,lo,lo+length)-reference)<1e-8,"fast granular wrap");
+  }
+ }
+ std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped and tiled A/B tests passed\n";
 }

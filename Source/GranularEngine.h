@@ -25,7 +25,12 @@ inline float grainWindow(int type,float x) noexcept {
     return .5f-.5f*float(std::cos(6.283185307179586*x));
 }
 inline double grainWrap(double x,double lo,double hi) noexcept {
-    double n=std::max(1.,hi-lo);double y=std::fmod(x-lo,n);return lo+(y<0?y+n:y);
+    double n=std::max(1.,hi-lo);double y=x-lo;
+    // Keep the identical offset arithmetic, avoid fmod inside one cycle.
+    if(y>=0&&y<n)return lo+y;
+    if(y>=n&&y<2*n)return lo+(y-n);
+    if(y<0&&y>=-n)return lo+(y+n);
+    y=std::fmod(y,n);return lo+(y<0?y+n:y);
 }
 template<class Sample>
 float renderGrains(GrainVoice& v,const GrainParams& p,const Sample* s,double noteRatio,double sr,double bpm) noexcept {

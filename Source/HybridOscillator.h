@@ -59,6 +59,19 @@ inline float wavetableHarmonic(int frame,int n) noexcept {
     if(t<2.f/3) return std::lerp(saw,square,(t-1.f/3)*3);
     return std::lerp(square,triangle,(t-2.f/3)*3);
 }
+struct TableReadPlan {
+    const float* a=nullptr;const float* b=nullptr;float morph=0;
+    float read(double phase)const noexcept{
+        if(!a)return 0;
+        // Phase is already normalized by the phase kernel.
+        double p=phase*tableSize;int i=std::min(int(p),tableSize-1);float frac=float(p-i);
+        return std::lerp(std::lerp(a[i],a[i+1],frac),std::lerp(b[i],b[i+1],frac),morph);
+    }
+};
+inline int harmonicBand(double delta) noexcept {
+    int b=0;double limit=.47/std::max(delta,1.e-12);
+    while(b+1<tableBands&&double(1<<(b+1))<=limit)++b;return b;
+}
 class WavetableBank {
     std::array<std::array<std::array<float,tableSize+1>,tableFrames>,tableBands> tables{};
 public:
@@ -76,6 +89,11 @@ public:
                 t[tableSize]=t[0];
             }
         }
+    }
+    TableReadPlan plan(float morph,double delta)const noexcept{
+        int band=harmonicBand(delta);float f=std::clamp(morph,0.f,1.f)*(tableFrames-1);
+        int fi=std::min(int(f),tableFrames-2);
+        return {tables[band][fi].data(),tables[band][fi+1].data(),f-fi};
     }
     float read(double phase,float morph,double delta)const noexcept {
         int band=0;const double limit=.47/std::max(delta,1.e-12);
@@ -144,6 +162,12 @@ public:
             }
         }
     }
+    TableReadPlan plan(float morph,double delta)const noexcept{
+        if(data.empty())return waveBank().plan(morph,delta);
+        int band=harmonicBand(delta);float f=std::clamp(morph,0.f,1.f)*(hdFrames-1);
+        int fi=std::min(int(f),hdFrames-2);
+        return {frame(band,fi),frame(band,fi+1),f-fi};
+    }
     float read(double phase,float morph,double delta)const noexcept{
         if(data.empty())return waveBank().read(phase,morph,delta);
         int b=0;double limit=.47/std::max(delta,1.e-12);
@@ -161,11 +185,20 @@ inline float readTable(const OscParams& o,double phase,double delta) noexcept {
     if(o.tableSource==1)return hdBank().read(phase,o.morph,delta);
     return waveBank().read(phase,o.morph,delta);
 }
+inline TableReadPlan planTable(const OscParams& o,double delta)noexcept{
+    if(o.tableSource==2)return o.userTable?o.userTable->plan(o.morph,delta):TableReadPlan{};
+    if(o.tableSource==1)return hdBank().plan(o.morph,delta);
+    return waveBank().plan(o.morph,delta);
+}
 struct HybridVoice {
     std::array<double,maxUnison> phase{}, mod{}, samplePos{}, driftPhase{};
     double syncPhase=0;
     std::array<double,maxUnison> cachedDelta{};
     double cacheBase=-1;float cacheDetune=-1;int cacheUnison=0;
+    std::array<double,maxUnison> cachedModDelta{};
+    std::array<TableReadPlan,maxUnison> cachedRead{};
+    float cacheMorph=-1,cacheRatio=-1;int cacheSource=-1;
+    const HDTable* cacheTable=nullptr;
     GrainVoice grain;
     void seed(int osc,int layer,int note,std::uint64_t age) noexcept {
         grain.seed(std::uint32_t(age*131u+note*17u+layer*41u+osc*71u+1u));
@@ -185,28 +218,65 @@ inline float sampleRead(const SampleData* s,double pos) noexcept {
     const auto i=std::size_t(pos),j=std::min(i+1,s->mono.size()-1);
     return std::lerp(s->mono[i],s->mono[j],float(pos-double(i)));
 }
-inline float renderGroupedTable(HybridVoice& v,const OscParams& o,double base,double noteDelta) noexcept {
+inline bool canGroupTable(const OscParams& o)noexcept{
+    return o.experimentalGrouped&&o.mode==OscMode::wavetable&&o.drift==0&&!o.sync&&!o.ring&&o.drive==0;
+}
+inline int prepareTable(HybridVoice& v,const OscParams& o,double base) noexcept{
     int un=std::clamp(o.unison,1,maxUnison);
-    if(v.cacheBase!=base||v.cacheDetune!=o.detune||v.cacheUnison!=un){
+    bool pitch=v.cacheBase!=base||v.cacheDetune!=o.detune||v.cacheUnison!=un;
+    if(pitch){
       for(int u=0;u<un;++u){
         double spread=un==1?0.:2.*u/(un-1)-1.;
         v.cachedDelta[u]=std::clamp(base*std::exp2(spread*o.detune/1200.),0.,.45);
       }
       v.cacheBase=base;v.cacheDetune=o.detune;v.cacheUnison=un;
     }
+    if(pitch||v.cacheMorph!=o.morph||v.cacheSource!=o.tableSource||v.cacheTable!=o.userTable){
+      for(int u=0;u<un;++u)v.cachedRead[u]=planTable(o,v.cachedDelta[u]);
+      v.cacheMorph=o.morph;v.cacheSource=o.tableSource;v.cacheTable=o.userTable;
+    }
+    if(pitch||v.cacheRatio!=o.ratio){
+      for(int u=0;u<un;++u)v.cachedModDelta[u]=std::min(.45,v.cachedDelta[u]*double(o.ratio));
+      v.cacheRatio=o.ratio;
+    }
+    return un;
+}
+inline float renderGroupedTable(HybridVoice& v,const OscParams& o,double base,double noteDelta) noexcept {
+    int un=prepareTable(v,o,base);
     v.syncPhase+=noteDelta;if(v.syncPhase>=1.)v.syncPhase-=1.;
     float sum=0;
-    for(int u=0;u<un;++u)sum+=readTable(o,v.phase[u],v.cachedDelta[u]);
+    for(int u=0;u<un;++u)sum+=v.cachedRead[u].read(v.phase[u]);
     advancePhases(v.phase.data(),v.cachedDelta.data(),un);
-    for(int u=0;u<un;++u)v.mod[u]=wrap(v.mod[u]+std::min(.45,v.cachedDelta[u]*double(o.ratio)));
+    advancePhases(v.mod.data(),v.cachedModDelta.data(),un);
     return sum*o.level/float(un);
+}
+// Process a tile at a time, lane-major. Keep the per-sample summation order.
+inline void renderTableTile(HybridVoice& v,const OscParams& o,double noteDelta,float* out,int count)noexcept{
+    std::fill_n(out,count,0.f);
+    if(o.level<=0)return;
+    const double base=std::clamp(noteDelta*std::exp2(double(o.tune)/12.),0.,.45);
+    const int un=prepareTable(v,o,base);
+    for(int u=0;u<un;++u){
+        auto read=v.cachedRead[u];double phase=v.phase[u],mod=v.mod[u];
+        const double d=v.cachedDelta[u],m=v.cachedModDelta[u];
+        for(int i=0;i<count;++i){
+            out[i]+=read.read(phase);
+            phase+=d;if(phase>=1.)phase-=1.;
+            mod+=m;if(mod>=1.)mod-=1.;
+        }
+        v.phase[u]=phase;v.mod[u]=mod;
+    }
+    for(int i=0;i<count;++i){
+        v.syncPhase+=noteDelta;if(v.syncPhase>=1.)v.syncPhase-=1.;
+        out[i]=out[i]*o.level/float(un);
+    }
 }
 template<class Analog>
 inline float renderHybrid(HybridVoice& v,const OscParams& o,const SampleData* sample,double noteDelta,double sr,Analog analog,double bpm=120.) noexcept {
     if(o.level<=0)return 0;
     int un=std::clamp(o.unison,1,maxUnison);
     const double base=std::clamp(noteDelta*std::exp2(double(o.tune)/12.),0.,.45);
-    if(o.experimentalGrouped&&o.mode==OscMode::wavetable&&o.drift==0&&!o.sync&&!o.ring&&o.drive==0)
+    if(canGroupTable(o))
         return renderGroupedTable(v,o,base,noteDelta);
     if(o.mode==OscMode::granular){
         float x=renderGrains(v.grain,o.grain,sample,base*sr/261.625565,sr,bpm);

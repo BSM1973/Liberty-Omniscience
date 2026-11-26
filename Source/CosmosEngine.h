@@ -18,7 +18,7 @@ struct Layer {
     const SampleData* sample=nullptr;
     Layer(){osc[0].level=1;}
 };
-struct Patch { std::array<Layer,layers> layer{}; float master=.7f; double bpm=120.; bool experimentalGrouped=false; };
+struct Patch { std::array<Layer,layers> layer{}; float master=.7f; double bpm=120.; bool experimentalGrouped=false; bool experimentalTiled=false; };
 inline float blep(double p, double dt) noexcept {
     if(dt<=0) return 0;
     if(p<dt){ p/=dt; return float(p+p-p*p-1); }
@@ -119,7 +119,23 @@ public:
       for(auto& a:v)if(a.active){
         std::array<double,layers> dt{};
         for(int k=0;k<layers;++k)dt[k]=std::clamp(440.*std::exp2((a.note-69+patch.layer[k].tune+bend[a.channel])/12.)/sr,0.,.45);
-        for(int i=0;i<n;++i){
+        constexpr int tileSize=32;
+        std::array<std::array<std::array<float,tileSize>,oscillatorCount>,layers> tile{};
+        for(int offset=0;offset<n&&a.active;offset+=tileSize){
+          int count=std::min(tileSize,n-offset);
+          std::array<std::array<bool,oscillatorCount>,layers> tiled{};
+          if(patch.experimentalTiled&&patch.experimentalGrouped){
+            for(int k=0;k<layers;++k){
+              // Release can end mid-tile. Keep that path sample accurate.
+              auto stage=a.env[k].stage;
+              if(stage==Env::release||stage==Env::off)continue;
+              for(int o=0;o<oscillatorCount;++o)if(canGroupTable(prepared[k][o])&&prepared[k][o].level>0){
+                tiled[k][o]=true;renderTableTile(a.hybrid[k][o],prepared[k][o],dt[k],tile[k][o].data(),count);
+              }
+            }
+          }
+          for(int j=0;j<count;++j){
+          int i=offset+j;
           float l=0,r=0;bool alive=false;
           for(int k=0;k<layers;++k){
             const auto& p=patch.layer[k];auto& e=a.env[k];
@@ -131,16 +147,17 @@ public:
               a.phase[k]+=dt[k];if(a.phase[k]>=1)a.phase[k]-=1;
               a.hybrid[k][0].phase[0]=a.phase[k];
             }else{
-              x=renderHybrid(a.hybrid[k][0],prepared[k][0],sources[k][0],dt[k],sr,oscillator,patch.bpm);
+              x=tiled[k][0]?tile[k][0][j]:renderHybrid(a.hybrid[k][0],prepared[k][0],sources[k][0],dt[k],sr,oscillator,patch.bpm);
               a.phase[k]=a.hybrid[k][0].phase[0];
             }
             for(int o=1;o<oscillatorCount;++o)if(p.osc[o].level>0)
-              x+=renderHybrid(a.hybrid[k][o],prepared[k][o],sources[k][o],dt[k],sr,oscillator,patch.bpm);
+              x+=tiled[k][o]?tile[k][o][j]:renderHybrid(a.hybrid[k][o],prepared[k][o],sources[k][o],dt[k],sr,oscillator,patch.bpm);
             a.low[k]+=alpha[k]*(x-a.low[k]);
             float s=a.low[k]*env;l+=s*gl[k];r+=s*gr[k];
           }
           if(!alive){a.active=false;break;}
           const float g=a.velocity*.12f*patch.master;left[i]+=l*g;right[i]+=r*g;
+          }
         }
       }
     }
