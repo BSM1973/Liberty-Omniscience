@@ -149,9 +149,9 @@ public:
     p.experimentalInterpolation=2;
 #endif
 #if defined(__aarch64__)
-    p.experimentalGrainWindow=true;p.experimentalGrainPrepared=true;
+    p.experimentalGrainWindow=true;p.experimentalGrainPrepared=true;p.experimentalAnalog=true;p.experimentalEnv=true;
 #endif
-    if(referenceDSPForQA){p.experimentalGrouped=false;p.experimentalTiled=false;p.experimentalInterpolation=0;p.experimentalGrainWindow=false;p.experimentalGrainPrepared=false;}
+    if(referenceDSPForQA){p.experimentalGrouped=false;p.experimentalTiled=false;p.experimentalInterpolation=0;p.experimentalGrainWindow=false;p.experimentalGrainPrepared=false;p.experimentalAnalog=false;p.experimentalEnv=false;}
     for(int k=0;k<4;++k){auto& l=p.layer[k];auto& a=params[k];l.enabled=a[0]->load()>.5f;l.wave=int(a[1]->load());l.gain=a[2]->load();l.pan=a[3]->load();l.tune=a[4]->load();l.cutoff=a[5]->load();l.attack=a[6]->load();l.decay=a[7]->load();l.sustain=a[8]->load();l.release=a[9]->load();l.sample=samples[k].load(std::memory_order_acquire);
       for(int o=0;o<5;++o){
         const auto& q=oscillators[k][o];auto& v=l.osc[o];v.mode=cosmos::OscMode(int(q[0]->load()));v.wave=int(q[1]->load());v.level=q[2]->load();v.tune=q[3]->load();v.unison=int(q[4]->load());v.detune=q[5]->load();v.drift=q[6]->load();v.morph=q[7]->load();v.ratio=q[8]->load();v.depth=q[9]->load();v.drive=q[10]->load();v.sync=q[11]->load()>.5f;v.ring=q[12]->load()>.5f;
@@ -263,7 +263,7 @@ public:
     g.setColour(juce::Colour(0xff0b1119));g.fillEllipse(knob.expanded(5));
     g.setGradientFill(juce::ColourGradient(juce::Colour(0xff53677f),c.x,c.y-r,juce::Colour(0xff192331),c.x,c.y+r,false));g.fillEllipse(knob);
     g.setColour(juce::Colour(0xff72859b));g.drawEllipse(knob,1.f);
-    juce::Path arc;arc.addCentredArc(c.x,c.y,r+5,r+5,0,start,start+pos*(end-start),true);g.setColour(cyan);g.strokePath(arc,juce::PathStrokeType(2.5f));
+    juce::Path arc;arc.addCentredArc(c.x,c.y,r+5,r+5,0,start,start+pos*(end-start),true);juce::Path track;track.addCentredArc(c.x,c.y,r+5,r+5,0,start,end,true);g.setColour(juce::Colour(0xff34485d));g.strokePath(track,juce::PathStrokeType(2.5f));g.setColour(cyan.withAlpha(.18f));g.strokePath(arc,juce::PathStrokeType(6.f));g.setColour(cyan);g.strokePath(arc,juce::PathStrokeType(2.5f));
     float a=start+pos*(end-start);g.drawLine(c.x+std::sin(a)*r*.45f,c.y-std::cos(a)*r*.45f,c.x+std::sin(a)*r*.83f,c.y-std::cos(a)*r*.83f,2.5f);
   }
 };
@@ -344,7 +344,7 @@ class Editor final:public juce::AudioProcessorEditor,private juce::ListBoxModel,
     oscSync.setVisible(oscPage&&!show);oscRing.setVisible(oscPage&&!show);
     for(auto& t:grainToggles)t.setVisible(show);
     grainWindowBox.setVisible(show);grainSourceBox.setVisible(show);
-    oscWave.setVisible(oscPage&&!show);tableBox.setVisible(oscPage&&!show);tableImport.setVisible(oscPage&&!show);
+    oscWave.setVisible(oscPage&&!show);tableBox.setVisible(oscPage&&!show&&oscMode.getSelectedId()==2);tableImport.setVisible(oscPage&&!show&&oscMode.getSelectedId()==2);
     repaint();
   }
   void setOscPage(bool show){
@@ -385,15 +385,15 @@ class Editor final:public juce::AudioProcessorEditor,private juce::ListBoxModel,
     });
   }
   void importSample(){
-    const int k=selected,o=selectedOsc;
+    const int k=selected,o=selectedOsc;const bool importGranular=grainPage;
     chooser=std::make_unique<juce::FileChooser>("Importer une source audio",juce::File{},"*.wav;*.aif;*.aiff");
     auto safe=juce::Component::SafePointer<Editor>(this);
-    chooser->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,[safe,k,o](const juce::FileChooser& f){
+    chooser->launchAsync(juce::FileBrowserComponent::openMode|juce::FileBrowserComponent::canSelectFiles,[safe,k,o,importGranular](const juce::FileChooser& f){
       if(auto* e=safe.getComponent()){
         auto file=f.getResult();if(file==juce::File{})return;
         auto error=e->p.loadSample(k,file);
         if(error.isNotEmpty()){juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,"Omniscience",error);return;}
-        if(auto* par=e->p.state.getParameter(oid(k,o,"mode")))par->setValueNotifyingHost(par->convertTo0to1(e->grainPage?5.f:4.f));
+        if(auto* par=e->p.state.getParameter(oid(k,o,"mode")))par->setValueNotifyingHost(par->convertTo0to1(importGranular?5.f:4.f));
         if(auto* par=e->p.state.getParameter(oid(k,o,"gSource")))par->setValueNotifyingHost(0.f);
         if(auto* par=e->p.state.getParameter(oid(k,o,"level")))par->setValueNotifyingHost(par->convertTo0to1(1.f));
         e->timerCallback();
@@ -409,7 +409,7 @@ class Editor final:public juce::AudioProcessorEditor,private juce::ListBoxModel,
   void selectedRowsChanged(int row)override{if(row>=0&&row<int(visible.size()))p.setCurrentProgram(visible[size_t(row)]);}
   void timerCallback()override{
     patchLabel.setText(p.getProgramName(p.getCurrentProgram()),juce::dontSendNotification);
-    if(oscPage){auto patch=p.patch();auto& l=patch.layer[selected];auto o=l.osc[selectedOsc];auto* s=l.sample;
+    if(oscPage){if(!grainPage){const bool table=oscMode.getSelectedId()==2;tableBox.setVisible(table);tableImport.setVisible(table);}auto patch=p.patch();auto& l=patch.layer[selected];auto o=l.osc[selectedOsc];auto* s=l.sample;
       if(o.mode==cosmos::OscMode::granular&&o.grain.source)s=&cosmos::factoryGrains()[size_t(o.grain.source-1)];
       std::array<float,16> positions;for(size_t i=0;i<positions.size();++i)positions[i]=p.grainView[selected][selectedOsc][i].load(std::memory_order_relaxed);
       preview.update(o,s,positions);sampleLabel.setText(o.mode==cosmos::OscMode::wavetable?(o.tableSource==2?p.tableName(selected):o.tableSource==1?juce::String("Factory HD 256 × 2048"):juce::String("Historique 16 × 2048")):o.mode==cosmos::OscMode::granular&&o.grain.source?juce::String("Source d'usine"):p.sampleName(selected),juce::dontSendNotification);}
@@ -445,7 +445,7 @@ public:
     };
     for(int j=0;j<9;++j){configure(oscKnobs[j]);label(oscLabels[j],juce::String::fromUTF8(oscNames[j]),13);}
     add(oscSync);add(oscRing);
-    grainButton.onClick=[this]{grainPage=!grainPage;if(grainPage)if(auto* par=p.state.getParameter(oid(selected,selectedOsc,"mode")))par->setValueNotifyingHost(par->convertTo0to1(5.f));grainVisibility();};add(grainButton);
+    grainButton.onClick=[this]{grainPage=!grainPage;grainVisibility();};add(grainButton);
     for(int j=0;j<9;++j){configure(grainKnobs[j]);label(grainLabels[j],juce::String::fromUTF8(grainNames[j]),13);}
     const char* flagNames[]={"Freeze","Reverse","Tempo"};
     for(int j=0;j<3;++j){grainToggles[j].setButtonText(flagNames[j]);add(grainToggles[j]);}
@@ -461,11 +461,14 @@ public:
     g.setColour(cyan);g.setFont(juce::Font(juce::FontOptions(14.f)));g.drawText("LIBERTY MUSIC SOFTWARE",22,13,260,24,juce::Justification::centredLeft);
     g.setColour(light);g.setFont(juce::Font(juce::FontOptions(38.f)));g.drawText("O M N I S C I E N C E",286,19,730,52,juce::Justification::centred);
     g.setColour(juce::Colour(0xff99b9d3));g.setFont(14);g.drawText("COSMOS ENGINE  /  HYBRID SYNTHESIZER",286,72,730,25,juce::Justification::centred);
-    g.setColour(panel);g.fillRoundedRectangle(14,150,266,580,8);g.fillRoundedRectangle(292,216,894,514,8);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff202d40),14,150,juce::Colour(0xff111924),14,730,false));g.fillRoundedRectangle(14,150,266,580,8);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff202b3c),292,216,juce::Colour(0xff141c28),292,730,false));g.fillRoundedRectangle(292,216,894,514,8);
+    g.setColour(juce::Colour(0xff40566f));g.drawRoundedRectangle(14,150,266,580,8,1);g.drawRoundedRectangle(292,216,894,514,8,1);
+    g.setColour(cyan.withAlpha(.65f));g.fillRect(303,218,870,2);
     g.setColour(cyan);g.setFont(17);g.drawText("BIBLIOTHÈQUE  /  200",25,162,242,28,juce::Justification::centred);
     g.setColour(juce::Colour(0xff35495e));if(!oscPage)for(int j=0;j<8;++j)g.drawRoundedRectangle(310.f+216.f*(j%4),316.f+180.f*(j/4),204.f,168.f,6.f,1.f);
     if(oscPage)for(int j=0;j<10;++j)g.drawRoundedRectangle(310.f+172.f*(j%5),449.f+132.f*(j/5),164.f,126.f,6.f,1.f);
-    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.3.5  COSMOS ULTRA PERFORMANCE  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
+    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.3.13  COSMOS REFERENCE EDITION  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
   }
   void resized()override{
     canvas.setTransform(juce::AffineTransform::scale(float(getWidth())/1200.f));canvas.setBounds(0,0,1200,760);
