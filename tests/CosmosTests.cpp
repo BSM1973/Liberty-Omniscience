@@ -45,5 +45,20 @@ int main(){
   e.reset();e.noteOn(0,60,1);e.render(l.data(),r.data(),4096,p);
   check(std::any_of(l.begin(),l.end(),[](float x){return std::abs(x)>.001f;}),"fifth oscillator audible");
  }
- std::cout<<"Cosmos foundation and hybrid tests passed\n";
+ {
+  cosmos::Engine e;e.prepare(48000);cosmos::Patch p;
+  for(auto& l:p.layer)l.enabled=false;p.layer[0].enabled=true;p.layer[0].attack=.001f;
+  auto& o=p.layer[0].osc[0];o.mode=cosmos::OscMode::granular;o.grain.source=1;o.grain.size=60;o.grain.density=35;
+  std::vector<float> l(4096),r(4096);
+  for(int w=0;w<3;++w){
+    e.reset();std::fill(l.begin(),l.end(),0);std::fill(r.begin(),r.end(),0);
+    o.grain.window=w;o.grain.reverse=w==1;o.grain.freeze=w==2;o.grain.loopStart=.2f;o.grain.loopEnd=.8f;
+    e.noteOn(0,60,1);e.render(l.data(),r.data(),4096,p);
+    double sum=0;for(float x:l){check(std::isfinite(x),"granular finite");sum+=x*x;}check(sum>.0001,"granular audible");
+    auto positions=e.grainPositions(0,0,&cosmos::factoryGrains()[0]);check(std::any_of(positions.begin(),positions.end(),[](float x){return x>=0;}),"grain telemetry");
+  }
+  e.reset();std::fill(l.begin(),l.end(),0);std::fill(r.begin(),r.end(),0);o.grain.source=0;
+  e.noteOn(0,60,1);e.render(l.data(),r.data(),4096,p);check(std::all_of(l.begin(),l.end(),[](float x){return x==0;}),"granular missing sample silence");
+ }
+ std::cout<<"Cosmos foundation, hybrid and granular tests passed\n";
 }

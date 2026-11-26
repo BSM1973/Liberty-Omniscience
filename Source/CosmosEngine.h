@@ -17,7 +17,7 @@ struct Layer {
     const SampleData* sample=nullptr;
     Layer(){osc[0].level=1;}
 };
-struct Patch { std::array<Layer,layers> layer{}; float master=.7f; };
+struct Patch { std::array<Layer,layers> layer{}; float master=.7f; double bpm=120.; };
 inline float blep(double p, double dt) noexcept {
     if(dt<=0) return 0;
     if(p<dt){ p/=dt; return float(p+p-p*p-1); }
@@ -66,7 +66,7 @@ class Engine {
     std::array<bool,16> pedal{};
     std::array<float,16> bend{};
 public:
-    void prepare(double rate) noexcept {sr=std::max(8000.,rate);(void)waveBank();reset();}
+    void prepare(double rate) noexcept {sr=std::max(8000.,rate);(void)waveBank();(void)factoryGrains();reset();}
     void reset() noexcept {for(auto& voice:v)voice=Voice{};pedal={};bend={};counter=0;}
     void noteOn(int ch,int note,float velocity) noexcept {
       if(ch<0||ch>=16)return;
@@ -88,6 +88,16 @@ public:
     }
     void pitch(int ch,int value) noexcept {if(ch>=0&&ch<16)bend[ch]=2.f*float(value-8192)/8192.f;}
     void allOff(int ch,bool immediate) noexcept {for(auto& a:v)if(a.active&&a.channel==ch){if(immediate)a=Voice{};else a.stop();}}
+    std::array<float,16> grainPositions(int layer,int osc,const SampleData* source)const noexcept{
+      std::array<float,16> out;out.fill(-1.f);
+      if(!source||source->mono.empty())return out;
+      for(const auto& a:v)if(a.active){
+        const auto& gs=a.hybrid[layer][osc].grain.grains;
+        bool found=false;for(size_t i=0;i<gs.size();++i)if(gs[i].age<gs[i].length){out[i]=float(gs[i].pos/double(source->mono.size()));found=true;}
+        if(found)break;
+      }
+      return out;
+    }
     void render(float* left,float* right,int n,const Patch& patch) noexcept {
       if(n<=0)return;
       std::array<float,layers> alpha{},gl{},gr{};
@@ -113,11 +123,11 @@ public:
               a.hybrid[k][0].phase[0]=a.phase[k];
             }else{
               auto primary=p.osc[0];primary.wave=p.wave;
-              x=renderHybrid(a.hybrid[k][0],primary,p.sample,dt[k],sr,oscillator);
+              x=renderHybrid(a.hybrid[k][0],primary,primary.grain.source>0&&primary.mode==OscMode::granular?&factoryGrains()[size_t(primary.grain.source-1)]:p.sample,dt[k],sr,oscillator,patch.bpm);
               a.phase[k]=a.hybrid[k][0].phase[0];
             }
             for(int o=1;o<oscillatorCount;++o)if(p.osc[o].level>0)
-              x+=renderHybrid(a.hybrid[k][o],p.osc[o],p.sample,dt[k],sr,oscillator);
+              x+=renderHybrid(a.hybrid[k][o],p.osc[o],p.osc[o].grain.source>0&&p.osc[o].mode==OscMode::granular?&factoryGrains()[size_t(p.osc[o].grain.source-1)]:p.sample,dt[k],sr,oscillator,patch.bpm);
             a.low[k]+=alpha[k]*(x-a.low[k]);
             float s=a.low[k]*env;l+=s*gl[k];r+=s*gr[k];
           }

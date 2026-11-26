@@ -5,17 +5,41 @@
 #include <numbers>
 #include <vector>
 #include <cstdint>
+#include "GranularEngine.h"
 
 namespace cosmos {
 constexpr int oscillatorCount=5, maxUnison=16, tableSize=2048, tableFrames=16, tableBands=8;
 constexpr double hpi=std::numbers::pi_v<double>;
-enum class OscMode { analog, wavetable, fm, am, sample };
+enum class OscMode { analog, wavetable, fm, am, sample, granular };
 struct SampleData { std::vector<float> mono; double rate=48000.; };
+inline const std::array<SampleData,4>& factoryGrains(){
+    static const auto bank=[]{
+        std::array<SampleData,4> result;
+        for(int k=0;k<4;++k){
+            auto& s=result[k];s.rate=24000;s.mono.resize(48000);
+            std::uint32_t noise=12345u+unsigned(k)*971;
+            for(size_t i=0;i<s.mono.size();++i){
+                double t=double(i)/s.rate;noise=noise*1664525u+1013904223u;
+                double n=double(noise>>8)/8388608.-1.;
+                double ph=2*hpi*261.625565*t;
+                double x=0;
+                if(k==0)x=.45*std::sin(ph)+.2*std::sin(ph*2.001)+.12*std::sin(ph*3.007);
+                if(k==1)x=.38*std::sin(ph+2.5*std::sin(ph*1.498)*std::exp(-t))+.12*n*std::exp(-2*t);
+                if(k==2)x=.27*std::sin(ph*.5)+.2*std::sin(ph*1.003)+.16*std::sin(ph*1.498)+.08*n;
+                if(k==3)x=.38*std::sin(ph*2)*std::exp(-t*1.4)+.2*std::sin(ph*3.83)*std::exp(-t*2)+.08*std::sin(ph);
+                double fade=std::min(1.,std::min(t,2.-t)*50.);
+                s.mono[i]=float(x*fade);
+            }
+        }
+        return result;
+    }();return bank;
+}
 struct OscParams {
     OscMode mode=OscMode::analog;
     int wave=0, unison=1;
     float level=0, tune=0, detune=0, drift=0, morph=0, ratio=2, depth=0, drive=0;
     bool sync=false, ring=false;
+    GrainParams grain{};
 };
 inline double wrap(double x) noexcept {return x-std::floor(x);}
 inline float wavetableHarmonic(int frame,int n) noexcept {
@@ -62,7 +86,9 @@ inline const WavetableBank& waveBank(){static const WavetableBank bank;return ba
 struct HybridVoice {
     std::array<double,maxUnison> phase{}, mod{}, samplePos{}, driftPhase{};
     double syncPhase=0;
+    GrainVoice grain;
     void seed(int osc,int layer,int note,std::uint64_t age) noexcept {
+        grain.seed(std::uint32_t(age*131u+note*17u+layer*41u+osc*71u+1u));
         for(int u=0;u<maxUnison;++u){
             auto seed=(age*31u+std::uint64_t(note*13+layer*41+osc*71+u*109))%1021u;
             driftPhase[u]=double(seed)/1021.;
@@ -80,10 +106,16 @@ inline float sampleRead(const SampleData* s,double pos) noexcept {
     return std::lerp(s->mono[i],s->mono[j],float(pos-double(i)));
 }
 template<class Analog>
-inline float renderHybrid(HybridVoice& v,const OscParams& o,const SampleData* sample,double noteDelta,double sr,Analog analog) noexcept {
+inline float renderHybrid(HybridVoice& v,const OscParams& o,const SampleData* sample,double noteDelta,double sr,Analog analog,double bpm=120.) noexcept {
     if(o.level<=0)return 0;
     int un=std::clamp(o.unison,1,maxUnison);
     const double base=std::clamp(noteDelta*std::exp2(double(o.tune)/12.),0.,.45);
+    if(o.mode==OscMode::granular){
+        float x=renderGrains(v.grain,o.grain,sample,base*sr/261.625565,sr,bpm);
+        if(o.ring){x*=float(std::sin(2*hpi*v.mod[0]));v.mod[0]=wrap(v.mod[0]+std::min(.45,base*double(o.ratio)));}
+        if(o.drive>0){float d=1+12*o.drive;x=std::tanh(d*x)/std::tanh(d);}
+        return x*o.level;
+    }
     v.syncPhase+=noteDelta;
     bool reset=v.syncPhase>=1.;if(reset)v.syncPhase-=1.;
     float sum=0;

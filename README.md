@@ -1,5 +1,3 @@
-# Liberty Omniscience — v0.2 HYBRID SYNTHESIS
+# Liberty Omniscience — v0.3 DEEP GRANULAR (candidat)
 
-Code candidat de développement : 4 couches, 20 oscillateurs, 32 voix partagées, VA, wavetable, FM/PM, AM, lecture de sample, unisson, Hard Sync, ring modulation et saturation. Page oscillateurs avec aperçu et import WAV/AIFF. Les 100 presets v0.1 restent la base de la bibliothèque; leur validation sonore et la compatibilité des sessions restent à confirmer. Voir [roadmap](docs/ROADMAP.md) pour les limites et les tests.
-
-Build : `cmake -S . -B build`, `cmake --build build --config Release`, `ctest --test-dir build -C Release --output-on-failure`. Pas d'installateur commercial à ce stade.
+Mode granulaire par oscillateur, réglages et télémétrie, quatre sources d'usine synthétiques, 200 patches paramétriques, moteur hybride v0.2 conservé. Voir [roadmap](docs/ROADMAP.md) pour limites et validation. Pas d'installateur commercial.
