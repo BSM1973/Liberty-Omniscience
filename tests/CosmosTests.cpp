@@ -184,5 +184,33 @@ int main(){
     for(int i=0;i<n;++i)check(std::abs(l[i]-ll[i])<1e-6f&&std::abs(r[i]-rr[i])<1e-6f,"parallel ordered mix equivalence");
   }
  }
+ {
+  for(int wave=0;wave<4;++wave)for(int i=0;i<65536;++i){
+    double phase=double(i)/65536.;
+    check(std::abs(cosmos::fastOscillator(wave,phase,.017)-cosmos::oscillator(wave,phase,.017))<1e-6f,"analog LUT equivalence");
+  }
+  for(double sr:{44100.,48000.,96000.}){
+    cosmos::Layer p;p.attack=.003f;p.decay=.015f;p.release=.02f;
+    cosmos::Env a,b;a.start();b.start();
+    for(int i=0;i<12000;++i){
+      if(i==1500)p.sustain=.37f;if(i==4000){a.stop();b.stop();}
+      if(i==4500)p.release=.01f;
+      check(a.tick(p,sr)==b.tickPrepared(cosmos::EnvPlan(p,sr))&&a.stage==b.stage,"ADSR prepared equivalence");
+    }
+  }
+  // Coherent spectral probe: high harmonics in a user table must not fold
+  // into the measured band when the mip level excludes them.
+  std::vector<float> cycle(cosmos::tableSize);
+  for(int i=0;i<cosmos::tableSize;++i)cycle[i]=float(.5*std::sin(2*cosmos::pi*i/cosmos::tableSize)+.4*std::sin(2*cosmos::pi*63*i/cosmos::tableSize));
+  cosmos::HDTable table(cycle);
+  for(double delta:{1./16.,3./32.,5./32.}){
+    double err=0,signal=0;
+    for(int i=0;i<4096;++i){
+      double phase=cosmos::wrap(i*delta),ref=.5*std::sin(2*cosmos::pi*phase);
+      double d=table.read(phase,.5f,delta)-ref;err+=d*d;signal+=ref*ref;
+    }
+    check(std::sqrt(err/signal)<.0001,"coherent wavetable alias residual");
+  }
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }

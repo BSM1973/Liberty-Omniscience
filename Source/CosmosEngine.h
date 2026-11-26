@@ -18,7 +18,7 @@ struct Layer {
     const SampleData* sample=nullptr;
     Layer(){osc[0].level=1;}
 };
-struct Patch { std::array<Layer,layers> layer{}; float master=.7f; double bpm=120.; bool experimentalGrouped=false; bool experimentalTiled=false; int experimentalInterpolation=0; bool experimentalGrainWindow=false; bool experimentalGrainPrepared=false; };
+struct Patch { std::array<Layer,layers> layer{}; float master=.7f; double bpm=120.; bool experimentalGrouped=false; bool experimentalTiled=false; int experimentalInterpolation=0; bool experimentalGrainWindow=false; bool experimentalGrainPrepared=false; bool experimentalAnalog=false; bool experimentalEnv=false; };
 inline float blep(double p, double dt) noexcept {
     if(dt<=0) return 0;
     if(p<dt){ p/=dt; return float(p+p-p*p-1); }
@@ -33,11 +33,42 @@ inline float oscillator(int wave, double p, double dt) noexcept {
       default: return float(std::sin(2*pi*p));
     }
 }
+inline const std::array<float,16385>& sineLut(){
+    static const auto a=[]{
+      std::array<float,16385> v{};
+      for(int i=0;i<=16384;++i)v[i]=float(std::sin(2*pi*double(i)/16384.));
+      return v;
+    }();return a;
+}
+inline float fastOscillator(int wave,double p,double dt) noexcept{
+    if(wave==2){double q=p+.5;if(q>=1.)q-=1.;return (p<.5?1.f:-1.f)+blep(p,dt)-blep(q,dt);}
+    if(wave!=0)return oscillator(wave,p,dt);
+    double q=p*16384.;int i=std::clamp(int(q),0,16383);const auto& a=sineLut();
+    return std::lerp(a[i],a[i+1],float(q-i));
+}
+struct EnvPlan {
+    float attack=0,decay=0,sustain=0,releaseSamples=1;
+    EnvPlan()=default;
+    EnvPlan(const Layer& p,double sr){
+      auto samples=[sr](float t){return float(std::max(1.,sr*double(t)));};
+      attack=1/samples(p.attack);decay=(1-p.sustain)/samples(p.decay);sustain=p.sustain;releaseSamples=samples(p.release);
+    }
+};
 struct Env {
     enum Stage { attack, decay, sustain, release, off };
     Stage stage=off; float level=0, releaseStart=0;
     void start() noexcept { level=0; stage=attack; }
     void stop() noexcept { if(stage!=off && stage!=release){releaseStart=level;stage=release;} }
+    float tickPrepared(const EnvPlan& p)noexcept{
+      switch(stage){
+        case attack: level+=p.attack;if(level>=1){level=1;stage=decay;}break;
+        case decay: level-=p.decay;if(level<=p.sustain){level=p.sustain;stage=sustain;}break;
+        case sustain: level=p.sustain;break;
+        case release: level-=releaseStart/p.releaseSamples;if(level<=.000001f){level=0;stage=off;}break;
+        case off:level=0;break;
+      }
+      return level;
+    }
     float tick(const Layer& p,double sr) noexcept {
       auto samples=[sr](float t){return float(std::max(1.,sr*double(t)));};
       switch(stage){
@@ -68,7 +99,7 @@ class Engine {
     std::array<bool,16> pedal{};
     std::array<float,16> bend{};
 public:
-    void prepare(double rate) noexcept {sr=std::max(8000.,rate);(void)waveBank();(void)hdBank();(void)factoryGrains();(void)hannLut();reset();}
+    void prepare(double rate) noexcept {sr=std::max(8000.,rate);(void)waveBank();(void)hdBank();(void)factoryGrains();(void)hannLut();(void)sineLut();reset();}
     void reset() noexcept {for(auto& voice:v)voice=Voice{};pedal={};bend={};counter=0;}
     void noteOn(int ch,int note,float velocity) noexcept {
       if(ch<0||ch>=16)return;
@@ -106,10 +137,12 @@ public:
     void renderRange(float* left,float* right,int n,const Patch& patch,int first,int last) noexcept {
       if(n<=0)return;
       std::array<float,layers> alpha{},gl{},gr{};
+      std::array<EnvPlan,layers> envelopes{};
+      auto analog=patch.experimentalAnalog?fastOscillator:oscillator;
       std::array<std::array<OscParams,oscillatorCount>,layers> prepared{};
       std::array<std::array<const SampleData*,oscillatorCount>,layers> sources{};
       for(int k=0;k<layers;++k){
-        const auto& p=patch.layer[k];
+        const auto& p=patch.layer[k];envelopes[k]=EnvPlan(p,sr);
         for(int o=0;o<oscillatorCount;++o){
           prepared[k][o]=p.osc[o];auto& x=prepared[k][o];x.experimentalGrouped=patch.experimentalGrouped;x.experimentalInterpolation=patch.experimentalInterpolation;x.grain.experimentalWindow=patch.experimentalGrainWindow;x.grain.experimentalPrepared=patch.experimentalGrainPrepared;
           if(o==0)x.wave=p.wave;
@@ -143,19 +176,19 @@ public:
           float l=0,r=0;bool alive=false;
           for(int k=0;k<layers;++k){
             const auto& p=patch.layer[k];auto& e=a.env[k];
-            float env=e.tick(p,sr);alive|=e.stage!=Env::off;
+            float env=patch.experimentalEnv?e.tickPrepared(envelopes[k]):e.tick(p,sr);alive|=e.stage!=Env::off;
             if(e.stage==Env::off)continue;
             float x=0;
             if(legacy(p.osc[0])){
-              x=oscillator(p.wave,a.phase[k],dt[k]);
+              x=analog(p.wave,a.phase[k],dt[k]);
               a.phase[k]+=dt[k];if(a.phase[k]>=1)a.phase[k]-=1;
               a.hybrid[k][0].phase[0]=a.phase[k];
             }else{
-              x=tiled[k][0]?tile[k][0][j]:renderHybrid(a.hybrid[k][0],prepared[k][0],sources[k][0],dt[k],sr,oscillator,patch.bpm);
+              x=tiled[k][0]?tile[k][0][j]:renderHybrid(a.hybrid[k][0],prepared[k][0],sources[k][0],dt[k],sr,analog,patch.bpm);
               a.phase[k]=a.hybrid[k][0].phase[0];
             }
             for(int o=1;o<oscillatorCount;++o)if(p.osc[o].level>0)
-              x+=tiled[k][o]?tile[k][o][j]:renderHybrid(a.hybrid[k][o],prepared[k][o],sources[k][o],dt[k],sr,oscillator,patch.bpm);
+              x+=tiled[k][o]?tile[k][o][j]:renderHybrid(a.hybrid[k][o],prepared[k][o],sources[k][o],dt[k],sr,analog,patch.bpm);
             a.low[k]+=alpha[k]*(x-a.low[k]);
             float s=a.low[k]*env;l+=s*gl[k];r+=s*gr[k];
           }
