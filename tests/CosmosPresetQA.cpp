@@ -7,6 +7,8 @@
 #include <memory>
 #include <cstdint>
 #include <algorithm>
+#include <chrono>
+#include <array>
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
 void cosmosSetReferenceDSP(juce::AudioProcessor&,bool);
@@ -37,6 +39,47 @@ bool wav(const std::filesystem::path& path,const Render& r){
     for(float x:r.data){auto n=std::int16_t(std::lround(std::clamp(std::isfinite(x)?x:0.f,-1.f,1.f)*32767));u16(f,std::uint16_t(n));}
     return bool(f);
 }
+// Measures the actual JUCE processor callback, not just the standalone DSP engine.
+bool qualifyProcessor(juce::AudioProcessor& a,juce::AudioProcessor& b,juce::AudioProcessorParameter& ma,juce::AudioProcessorParameter& mb){
+    std::ofstream report("cosmos-processor-qualification.csv");
+    report<<"preset,sample_rate,block,voices,mean_budget_pct,p95_budget_pct,p99_budget_pct,max_budget_pct,misses,blocks,reference_rms_error,reference_peak_error,finite,dsp_pass,deadline_pass\n";
+    bool all=true;
+    for(int preset:{0,15,50,100,115,150,199})for(double rate:{44100.,48000.,96000.})for(int n:{64,128,512})for(int notes:{1,8,32}){
+        a.setCurrentProgram(preset);juce::MemoryBlock state;a.getStateInformation(state);b.setStateInformation(state.getData(),int(state.getSize()));
+        a.releaseResources();b.releaseResources();a.prepareToPlay(rate,n);b.prepareToPlay(rate,n);
+        juce::AudioBuffer<float> x(2,n),y(2,n);juce::MidiBuffer mx,my;
+        mx.ensureSize(4096);my.ensureSize(4096);
+        const int count=std::max(32,int(rate*.25/n));
+        std::vector<double> times;times.reserve(count);
+        double sum=0,err=0,signal=0;float peak=0;int misses=0;bool finite=true;
+        for(int i=0;i<count;++i){
+            mx.clear();my.clear();
+            if(i==0)for(int j=0;j<notes;++j)mx.addEvent(juce::MidiMessage::noteOn(1,40+j,.65f),j%std::min(n,13));
+            if(i==count/4)mx.addEvent(juce::MidiMessage::pitchWheel(1,9300),n/3);
+            if(i==count/2){ma.setValueNotifyingHost(.53f);mb.setValueNotifyingHost(.53f);mx.addEvent(juce::MidiMessage::controllerEvent(1,64,127),n/4);}
+            if(i==count*3/4)for(int j=0;j<notes;++j)mx.addEvent(juce::MidiMessage::noteOff(1,40+j),j%std::min(n,13));
+            if(i==count-2)mx.addEvent(juce::MidiMessage::controllerEvent(1,64,0),n/3);
+            my.addEvents(mx,0,n,0);
+            const auto start=std::chrono::steady_clock::now();a.processBlock(x,mx);
+            const double budget=100.*std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count()*rate/n;
+            times.push_back(budget);sum+=budget;misses+=budget>100.;
+            b.processBlock(y,my);
+            for(int ch=0;ch<2;++ch)for(int j=0;j<n;++j){
+                float u=x.getSample(ch,j),v=y.getSample(ch,j);finite&=std::isfinite(u)&&std::isfinite(v);
+                double delta=double(u)-v;err+=delta*delta;signal+=double(v)*v;peak=std::max(peak,std::abs(u-v));
+            }
+        }
+        std::sort(times.begin(),times.end());
+        auto p=[&](double f){return times[size_t(f*(times.size()-1))];};
+        double relative=std::sqrt(err/std::max(signal,1e-20));
+        bool pass=finite&&signal>1e-12&&peak<1e-4f&&relative<1e-4;
+        report<<preset+1<<','<<rate<<','<<n<<','<<notes<<','<<sum/count<<','<<p(.95)<<','<<p(.99)<<','<<times.back()<<','<<misses<<','<<count<<','<<relative<<','<<peak<<','<<finite<<','<<pass<<','<<(misses==0)<<'\n';
+        all&=pass;
+        if(!pass)std::cerr<<"Processor qualification DSP mismatch: "<<preset+1<<" / "<<rate<<" / "<<n<<" / "<<notes<<'\n';
+    }
+    std::cout<<"Processor qualification matrix: 189 scenarios; DSP "<<(all?"passed":"FAILED")<<"; deadline outcomes in CSV (informational on shared runners)\n";
+    return all&&bool(report);
+}
 int main(){
     juce::ScopedJuceInitialiser_GUI gui;
     auto a=std::unique_ptr<juce::AudioProcessor>(createPluginFilter()),b=std::unique_ptr<juce::AudioProcessor>(createPluginFilter());
@@ -64,5 +107,6 @@ int main(){
         if(!ok){++failed;std::cerr<<"Preset "<<i+1<<" failed\n";}
     }
     std::cout<<200-failed<<"/200 presets passed automated DSP/state checks\n";
-    return failed||!report?1:0;
+    bool qualified=qualifyProcessor(*a,*b,*ma,*mb);
+    return failed||!report||!qualified?1:0;
 }
