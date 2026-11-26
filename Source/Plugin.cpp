@@ -68,8 +68,15 @@ public:
   std::array<std::atomic<const cosmos::HDTable*>,4> tables{};
   std::vector<std::unique_ptr<cosmos::HDTable>> retainedTables;
   std::array<juce::String,4> tablePaths{};
+  std::vector<juce::String> retainedTablePaths,retainedSamplePaths;
+  std::vector<juce::int64> retainedTableSizes,retainedSampleSizes;
+  std::vector<juce::Time> retainedTableTimes,retainedSampleTimes;
   juce::String loadTable(int k,const juce::File& file){
     std::lock_guard<std::mutex> lock(sampleMutex);
+    if(k<0||k>=4)return "Couche invalide.";
+    if(!file.existsAsFile())return "Fichier absent.";
+    const auto path=file.getFullPathName();const auto bytes=file.getSize();const auto modified=file.getLastModificationTime();
+    for(size_t i=0;i<retainedTables.size();++i)if(retainedTablePaths[i]==path&&retainedTableSizes[i]==bytes&&retainedTableTimes[i]==modified){tablePaths[k]=path;tables[k].store(retainedTables[i].get(),std::memory_order_release);return {};}
     auto reader=std::unique_ptr<juce::AudioFormatReader>(formats.createReaderFor(file));
     if(!reader||reader->lengthInSamples<cosmos::tableSize||reader->lengthInSamples%cosmos::tableSize||reader->lengthInSamples>cosmos::hdFrames*cosmos::tableSize)
       return "WAV requis : 1 à 256 cycles de 2048 échantillons.";
@@ -79,7 +86,7 @@ public:
     std::vector<float> input(static_cast<size_t>(n));
     for(int i=0;i<n;++i)input[size_t(i)]=reader->numChannels>1?.5f*(buffer.getSample(0,i)+buffer.getSample(1,i)):buffer.getSample(0,i);
     auto table=std::make_unique<cosmos::HDTable>(input);auto* ptr=table.get();
-    retainedTables.push_back(std::move(table));tablePaths[k]=file.getFullPathName();tables[k].store(ptr,std::memory_order_release);return {};
+    retainedTablePaths.push_back(path);retainedTableSizes.push_back(bytes);retainedTableTimes.push_back(modified);retainedTables.push_back(std::move(table));tablePaths[k]=path;tables[k].store(ptr,std::memory_order_release);return {};
   }
   juce::String tableName(int k)const{
     std::lock_guard<std::mutex> lock(sampleMutex);
@@ -92,6 +99,10 @@ public:
   size_t retainedBytes=0;
   juce::String loadSample(int layer,const juce::File& file){
     std::lock_guard<std::mutex> lock(sampleMutex);
+    if(layer<0||layer>=4)return "Couche invalide.";
+    if(!file.existsAsFile())return "Fichier absent.";
+    const auto path=file.getFullPathName();const auto bytes=file.getSize();const auto modified=file.getLastModificationTime();
+    for(size_t i=0;i<retainedSamples.size();++i)if(retainedSamplePaths[i]==path&&retainedSampleSizes[i]==bytes&&retainedSampleTimes[i]==modified){samplePaths[layer]=path;samples[layer].store(retainedSamples[i].get(),std::memory_order_release);return {};}
     auto reader=std::unique_ptr<juce::AudioFormatReader>(formats.createReaderFor(file));
     if(!reader || reader->lengthInSamples<=0 || reader->lengthInSamples>5760000 || reader->sampleRate<=0 || reader->lengthInSamples>reader->sampleRate*30)
       return "Fichier incompatible ou supérieur à 30 secondes.";
@@ -104,7 +115,7 @@ public:
       float x=buffer.getSample(0,i);if(reader->numChannels>1)x=.5f*(x+buffer.getSample(1,i));
       s->mono[size_t(i)]=std::isfinite(x)?std::clamp(x,-1.f,1.f):0.f;
     }
-    auto ptr=s.get();retainedSamples.push_back(std::move(s));retainedBytes+=size_t(n)*sizeof(float);
+    auto ptr=s.get();retainedSamplePaths.push_back(path);retainedSampleSizes.push_back(bytes);retainedSampleTimes.push_back(modified);retainedSamples.push_back(std::move(s));retainedBytes+=size_t(n)*sizeof(float);
     samplePaths[layer]=file.getFullPathName();samples[layer].store(ptr,std::memory_order_release);
     return {};
   }
@@ -468,7 +479,7 @@ public:
     g.setColour(cyan);g.setFont(17);g.drawText("BIBLIOTHÈQUE  /  200",25,162,242,28,juce::Justification::centred);
     g.setColour(juce::Colour(0xff35495e));if(!oscPage)for(int j=0;j<8;++j)g.drawRoundedRectangle(310.f+216.f*(j%4),316.f+180.f*(j/4),204.f,168.f,6.f,1.f);
     if(oscPage)for(int j=0;j<10;++j)g.drawRoundedRectangle(310.f+172.f*(j%5),449.f+132.f*(j/5),164.f,126.f,6.f,1.f);
-    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.3.13  COSMOS REFERENCE EDITION  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
+    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.3.14  COSMOS MASTER VALIDATION  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
   }
   void resized()override{
     canvas.setTransform(juce::AffineTransform::scale(float(getWidth())/1200.f));canvas.setBounds(0,0,1200,760);
@@ -495,4 +506,7 @@ juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter(){return new Processor();
 
 #ifdef COSMOS_PRESET_QA
 void cosmosSetReferenceDSP(juce::AudioProcessor& p,bool ref){static_cast<Processor&>(p).referenceDSPForQA=ref;}
+bool cosmosTestImport(juce::AudioProcessor& p,const juce::File& f,bool table){auto& x=static_cast<Processor&>(p);return (table?x.loadTable(0,f):x.loadSample(0,f)).isEmpty();}
+bool cosmosTestAssets(juce::AudioProcessor& p,bool expected){auto& x=static_cast<Processor&>(p);return (x.samples[0].load()!=nullptr)==expected&&(x.tables[0].load()!=nullptr)==expected;}
+bool cosmosTestCache(juce::AudioProcessor& p){auto& x=static_cast<Processor&>(p);return x.retainedSamples.size()==1&&x.retainedTables.size()==1;}
 #endif

@@ -80,6 +80,27 @@ bool qualifyProcessor(juce::AudioProcessor& a,juce::AudioProcessor& b,juce::Audi
     std::cout<<"Processor qualification matrix: 189 scenarios; DSP "<<(all?"passed":"FAILED")<<"; deadline outcomes in CSV (informational on shared runners)\n";
     return all&&bool(report);
 }
+bool cosmosTestImport(juce::AudioProcessor&,const juce::File&,bool);
+bool cosmosTestAssets(juce::AudioProcessor&,bool);
+bool cosmosTestCache(juce::AudioProcessor&);
+bool qualifyImports(){
+    auto dir=juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("cosmos-assets","",false);
+    if(!dir.createDirectory())return false;
+    auto file=dir.getChildFile("cycle.wav");Render cycle;cycle.data.resize(4096);
+    for(int i=0;i<2048;++i)cycle.data[2*i]=cycle.data[2*i+1]=.5f*float(std::sin(6.283185307179586*i/2048.));
+    bool ok=wav(std::filesystem::path(file.getFullPathName().toStdString()),cycle);
+    auto p=std::unique_ptr<juce::AudioProcessor>(createPluginFilter());
+    ok=ok&&cosmosTestImport(*p,file,false)&&cosmosTestImport(*p,file,true)&&cosmosTestAssets(*p,true);
+    juce::MemoryBlock state;p->getStateInformation(state);
+    auto restored=std::unique_ptr<juce::AudioProcessor>(createPluginFilter());
+    for(int i=0;i<12;++i){restored->setStateInformation(state.getData(),int(state.getSize()));ok=ok&&cosmosTestAssets(*restored,true)&&cosmosTestCache(*restored);}
+    ok=ok&&!cosmosTestImport(*restored,dir.getChildFile("missing.wav"),true);
+    ok=file.deleteFile()&&ok;
+    restored->setStateInformation(state.getData(),int(state.getSize()));ok=ok&&cosmosTestAssets(*restored,false);
+    dir.deleteRecursively();
+    std::cout<<"Personal WAV/table import and repeated restore: "<<(ok?"passed":"FAILED")<<'\n';
+    return ok;
+}
 int main(){
     juce::ScopedJuceInitialiser_GUI gui;
     auto a=std::unique_ptr<juce::AudioProcessor>(createPluginFilter()),b=std::unique_ptr<juce::AudioProcessor>(createPluginFilter());
@@ -108,5 +129,6 @@ int main(){
     }
     std::cout<<200-failed<<"/200 presets passed automated DSP/state checks\n";
     bool qualified=qualifyProcessor(*a,*b,*ma,*mb);
-    return failed||!report||!qualified?1:0;
+    bool imported=qualifyImports();
+    return failed||!report||!qualified||!imported?1:0;
 }
