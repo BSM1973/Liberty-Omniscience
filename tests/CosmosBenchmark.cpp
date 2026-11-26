@@ -11,7 +11,7 @@ int main(int argc,char** argv){
   std::cout<<"scenario,backend,rendered_seconds,voices,block,sample_rate,mean_cpu_pct,max_cpu_pct,engine_object_bytes,voice_pool_bytes,factory_hd_extra_bytes,imported_hd_table_bytes,peak,finite\n";
   for(int mode=0;mode<8;++mode)for(int notes:{1,8,32}){
     if(longRun&&(notes!=32||(mode!=6&&mode!=7)))continue;
-    cosmos::Patch p;e.reset();p.experimentalGrouped=mode>=3&&mode<=6;p.experimentalTiled=mode>=4&&mode<=6;p.experimentalInterpolation=mode==5?1:mode==6?2:0;p.experimentalGrainWindow=mode==7;
+    cosmos::Patch p;e.reset();p.experimentalGrouped=mode>=3&&mode<=6;p.experimentalTiled=mode>=4&&mode<=6;p.experimentalInterpolation=mode==5?1:mode==6?2:0;p.experimentalGrainWindow=mode==7;p.experimentalGrainPrepared=mode==7;
     for(auto& layer:p.layer){
       layer.enabled=true;layer.attack=.001f;
       for(int o=0;o<5;++o){

@@ -11,12 +11,20 @@ struct GrainParams {
     int window=0,source=0;
     bool freeze=false,reverse=false,sync=false;
     bool experimentalWindow=false;
+    bool experimentalPrepared=false;
 };
 struct Grain {double pos=0,step=0;int age=0,length=0;};
+struct GrainPlan {
+    double lo=0,hi=0,scanStep=0,rate=0,interval=0,normal=1,pitchScale=0;
+    int length=2;
+};
 struct GrainVoice {
     std::array<Grain,16> grains{};
     double countdown=0,scan=0;float priorPosition=-1;
     std::uint32_t rng=1;
+    GrainPlan plan{};
+    double lastRate=-1,lastSR=-1,lastBpm=-1,lastRatio=-1,lastSize=-1;
+    GrainParams prior{};
     float random() noexcept {rng^=rng<<13;rng^=rng>>17;rng^=rng<<5;return float(rng&0xffffff)/8388608.f-1.f;}
     void seed(std::uint32_t n) noexcept {rng=n?n:1;}
 };
@@ -46,26 +54,43 @@ inline double grainWrap(double x,double lo,double hi) noexcept {
     y=std::fmod(y,n);return lo+(y<0?y+n:y);
 }
 template<class Sample>
+const GrainPlan& prepareGrainPlan(GrainVoice& v,const GrainParams& p,const Sample& s,double noteRatio,double sr,double bpm)noexcept{
+    const auto& q=v.prior;
+    if(v.lastRate==s.rate&&v.lastSR==sr&&v.lastBpm==bpm&&v.lastRatio==noteRatio&&v.lastSize==double(s.mono.size())&&
+       q.loopStart==p.loopStart&&q.loopEnd==p.loopEnd&&q.stretch==p.stretch&&q.reverse==p.reverse&&q.density==p.density&&q.sync==p.sync&&q.size==p.size)return v.plan;
+    v.lastRate=s.rate;v.lastSR=sr;v.lastBpm=bpm;v.lastRatio=noteRatio;v.lastSize=double(s.mono.size());v.prior=p;
+    auto& a=v.plan;double end=double(s.mono.size());
+    a.lo=std::min(std::clamp(double(p.loopStart),0.,.999)*end,end-1.);
+    a.hi=std::clamp(std::clamp(double(p.loopEnd),0.,1.)*end,a.lo+1.,end);
+    a.scanStep=(p.reverse?-1.:1.)*s.rate/sr/std::max(.125,double(p.stretch));
+    a.rate=std::clamp(double(p.density),1.,80.);
+    if(p.sync)a.rate*=std::clamp(bpm,20.,300.)/60.;
+    a.interval=sr/a.rate;a.normal=std::max(1.,a.rate*double(p.size)*.001*.55);
+    a.pitchScale=noteRatio*s.rate/sr;a.length=std::max(2,int(sr*std::clamp(double(p.size),5.,500.)*.001));
+    return a;
+}
+template<class Sample>
 float renderGrains(GrainVoice& v,const GrainParams& p,const Sample* s,double noteRatio,double sr,double bpm) noexcept {
     if(!s||s->mono.size()<2)return 0;
-    double end=double(s->mono.size()),lo=std::clamp(double(p.loopStart),0.,.999)*end;
-    double hi=std::clamp(double(p.loopEnd),0.,1.)*end;
+    const GrainPlan* plan=p.experimentalPrepared?&prepareGrainPlan(v,p,*s,noteRatio,sr,bpm):nullptr;
+    double end=double(s->mono.size()),lo=plan?plan->lo:std::clamp(double(p.loopStart),0.,.999)*end;
+    double hi=plan?plan->hi:std::clamp(double(p.loopEnd),0.,1.)*end;
     lo=std::min(lo,end-1.);hi=std::clamp(hi,lo+1.,end);
     if(v.priorPosition!=p.position){v.scan=lo+(hi-lo)*p.position;v.priorPosition=p.position;}
     double speed=std::max(.125,double(p.stretch));
-    if(!p.freeze)v.scan=grainWrap(v.scan+(p.reverse?-1.:1.)*s->rate/sr/speed,lo,hi);
-    double rate=std::clamp(double(p.density),1.,80.);
-    if(p.sync)rate*=std::clamp(bpm,20.,300.)/60.;
+    if(!p.freeze)v.scan=grainWrap(v.scan+(plan?plan->scanStep:(p.reverse?-1.:1.)*s->rate/sr/speed),lo,hi);
+    double rate=plan?plan->rate:std::clamp(double(p.density),1.,80.);
+    if(!plan&&p.sync)rate*=std::clamp(bpm,20.,300.)/60.;
     if(--v.countdown<=0){
         Grain* target=nullptr;for(auto& g:v.grains)if(g.age>=g.length){target=&g;break;}
         if(target){
             double jitter=(p.spread+p.blur*.3)*v.random()*(hi-lo);
             target->pos=grainWrap(v.scan+jitter,lo,hi);
-            target->step=noteRatio*s->rate/sr*std::exp2(v.random()*p.pitchJitter/1200.)*(p.reverse?-1.:1.);
-            target->length=std::max(2,int(sr*std::clamp(double(p.size),5.,500.)*.001));
+            target->step=(plan?plan->pitchScale:noteRatio*s->rate/sr)*std::exp2(v.random()*p.pitchJitter/1200.)*(p.reverse?-1.:1.);
+            target->length=plan?plan->length:std::max(2,int(sr*std::clamp(double(p.size),5.,500.)*.001));
             target->age=0;
         }
-        v.countdown=std::max(1.,sr/rate*(1.+p.blur*.45*v.random()));
+        v.countdown=std::max(1.,(plan?plan->interval:sr/rate)*(1.+p.blur*.45*v.random()));
     }
     float out=0;
     for(auto& g:v.grains)if(g.age<g.length){
@@ -76,6 +101,6 @@ float renderGrains(GrainVoice& v,const GrainParams& p,const Sample* s,double not
         out+=x*(p.experimentalWindow?fastGrainWindow(p.window,progress):grainWindow(p.window,progress));++g.age;g.pos+=g.step;
     }
     double overlap=rate*double(p.size)*.001;
-    return out/float(std::max(1.,overlap*.55));
+    return out/float(plan?plan->normal:std::max(1.,overlap*.55));
 }
 }

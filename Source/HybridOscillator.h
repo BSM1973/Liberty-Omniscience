@@ -200,6 +200,7 @@ struct HybridVoice {
     std::array<TableReadPlan,maxUnison> cachedRead{};
     float cacheMorph=-1,cacheRatio=-1;int cacheSource=-1;
     const HDTable* cacheTable=nullptr;
+    double cachedNoteDelta=-1;float cachedTune=0;double cachedBaseFrequency=0;
     GrainVoice grain;
     void seed(int osc,int layer,int note,std::uint64_t age) noexcept {
         grain.seed(std::uint32_t(age*131u+note*17u+layer*41u+osc*71u+1u));
@@ -221,6 +222,13 @@ inline float sampleRead(const SampleData* s,double pos) noexcept {
 }
 inline bool canGroupTable(const OscParams& o)noexcept{
     return o.experimentalGrouped&&o.mode==OscMode::wavetable&&o.drift==0&&!o.sync&&!o.ring&&o.drive==0;
+}
+inline double cachedBase(HybridVoice& v,const OscParams& o,double noteDelta)noexcept{
+    if(v.cachedNoteDelta!=noteDelta||v.cachedTune!=o.tune){
+      v.cachedNoteDelta=noteDelta;v.cachedTune=o.tune;
+      v.cachedBaseFrequency=std::clamp(noteDelta*std::exp2(double(o.tune)/12.),0.,.45);
+    }
+    return v.cachedBaseFrequency;
 }
 inline int prepareTable(HybridVoice& v,const OscParams& o,double base) noexcept{
     int un=std::clamp(o.unison,1,maxUnison);
@@ -255,7 +263,7 @@ inline float renderGroupedTable(HybridVoice& v,const OscParams& o,double base,do
 inline void renderTableTile(HybridVoice& v,const OscParams& o,double noteDelta,float* out,int count)noexcept{
     std::fill_n(out,count,0.f);
     if(o.level<=0)return;
-    const double base=std::clamp(noteDelta*std::exp2(double(o.tune)/12.),0.,.45);
+    const double base=cachedBase(v,o,noteDelta);
     const int un=prepareTable(v,o,base);
     for(int u=0;u<un;++u){
         auto read=v.cachedRead[u];double phase=v.phase[u],mod=v.mod[u];
@@ -290,7 +298,7 @@ template<class Analog>
 inline float renderHybrid(HybridVoice& v,const OscParams& o,const SampleData* sample,double noteDelta,double sr,Analog analog,double bpm=120.) noexcept {
     if(o.level<=0)return 0;
     int un=std::clamp(o.unison,1,maxUnison);
-    const double base=std::clamp(noteDelta*std::exp2(double(o.tune)/12.),0.,.45);
+    const double base=cachedBase(v,o,noteDelta);
     if(canGroupTable(o))
         return renderGroupedTable(v,o,base,noteDelta);
     if(o.mode==OscMode::granular){

@@ -157,7 +157,7 @@ int main(){
   cosmos::Engine scalar,fast;scalar.prepare(48000);fast.prepare(48000);
   cosmos::Patch a;
   for(auto& layer:a.layer)for(auto& o:layer.osc){o.mode=cosmos::OscMode::granular;o.grain.source=1;o.grain.size=80;o.grain.density=30;o.level=.2f;}
-  auto b=a;b.experimentalGrainWindow=true;
+  auto b=a;b.experimentalGrainWindow=true;b.experimentalGrainPrepared=true;
   for(int i=0;i<8;++i){scalar.noteOn(0,48+i,.7f);fast.noteOn(0,48+i,.7f);}
   std::vector<float> l(128),r(128),ll(128),rr(128);double err=0,ref=0;
   for(int block=0;block<128;++block){

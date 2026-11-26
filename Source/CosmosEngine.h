@@ -18,7 +18,7 @@ struct Layer {
     const SampleData* sample=nullptr;
     Layer(){osc[0].level=1;}
 };
-struct Patch { std::array<Layer,layers> layer{}; float master=.7f; double bpm=120.; bool experimentalGrouped=false; bool experimentalTiled=false; int experimentalInterpolation=0; bool experimentalGrainWindow=false; };
+struct Patch { std::array<Layer,layers> layer{}; float master=.7f; double bpm=120.; bool experimentalGrouped=false; bool experimentalTiled=false; int experimentalInterpolation=0; bool experimentalGrainWindow=false; bool experimentalGrainPrepared=false; };
 inline float blep(double p, double dt) noexcept {
     if(dt<=0) return 0;
     if(p<dt){ p/=dt; return float(p+p-p*p-1); }
@@ -108,7 +108,7 @@ public:
       for(int k=0;k<layers;++k){
         const auto& p=patch.layer[k];
         for(int o=0;o<oscillatorCount;++o){
-          prepared[k][o]=p.osc[o];auto& x=prepared[k][o];x.experimentalGrouped=patch.experimentalGrouped;x.experimentalInterpolation=patch.experimentalInterpolation;x.grain.experimentalWindow=patch.experimentalGrainWindow;
+          prepared[k][o]=p.osc[o];auto& x=prepared[k][o];x.experimentalGrouped=patch.experimentalGrouped;x.experimentalInterpolation=patch.experimentalInterpolation;x.grain.experimentalWindow=patch.experimentalGrainWindow;x.grain.experimentalPrepared=patch.experimentalGrainPrepared;
           if(o==0)x.wave=p.wave;
           sources[k][o]=x.mode==OscMode::granular&&x.grain.source>0&&x.grain.source<=4?&factoryGrains()[size_t(x.grain.source-1)]:p.sample;
         }
