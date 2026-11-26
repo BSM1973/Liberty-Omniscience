@@ -89,3 +89,6 @@ Enable tested analog sine LUT and prepared ADSR on Apple Silicon only, disable b
 
 ## v0.3.14 MASTER VALIDATION candidate
 Reuse immutable imported WAV samples and HD tables for matching path, size and modification timestamp; avoid repeated state restore consuming session limits. Missing sources still clear on restore; invalid layer guard. QA creates a stereo 2048-sample WAV, imports as sample and table, restores twelve times, checks retained counts and missing-file behavior. AIFF and visual editor qualification still pending. v0.3.12 green 200/200 presets and 189/189 DSP matrix both platforms; offline multicore deadlines unresolved. v0.3.13 pending.
+
+## v0.3.15 ENGINE FINAL CONTROL candidate
+AIFF PCM16 stereo 48 kHz fixture import and restore; nine actual editor snapshots (900/1200/1800 widths, layer/oscillator/granular pages), sibling bounds intersection and canvas containment checks. Not a complete visual or text-legibility certification. v0.3.13 green 200/200 presets and 189/189 matrix per platform. Offline multicore endurance HD 90.7054% mac/62.2895% Windows; misses 2095/41. Real-time multicore remains disabled. v0.3.14 pending. No new DSP defaults.

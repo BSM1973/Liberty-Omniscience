@@ -83,6 +83,17 @@ bool qualifyProcessor(juce::AudioProcessor& a,juce::AudioProcessor& b,juce::Audi
 bool cosmosTestImport(juce::AudioProcessor&,const juce::File&,bool);
 bool cosmosTestAssets(juce::AudioProcessor&,bool);
 bool cosmosTestCache(juce::AudioProcessor&);
+bool cosmosTestLayout(juce::AudioProcessor&,const juce::File&);
+void be16(std::ostream& f,unsigned v){f.put(char((v>>8)&255));f.put(char(v&255));}
+void be32(std::ostream& f,unsigned v){be16(f,v>>16);be16(f,v&65535);}
+bool aiff(const std::filesystem::path& path,const Render& r){
+    std::ofstream f(path,std::ios::binary);unsigned bytes=unsigned(r.data.size()*2);
+    f.write("FORM",4);be32(f,46+bytes);f.write("AIFFCOMM",8);be32(f,18);be16(f,2);be32(f,unsigned(r.data.size()/2));be16(f,16);
+    const unsigned char rate[]={0x40,0x0e,0xbb,0x80,0,0,0,0,0,0};f.write(reinterpret_cast<const char*>(rate),10);
+    f.write("SSND",4);be32(f,bytes+8);be32(f,0);be32(f,0);
+    for(float x:r.data)be16(f,std::uint16_t(std::int16_t(std::lround(std::clamp(x,-1.f,1.f)*32767))));
+    return bool(f);
+}
 bool qualifyImports(){
     auto dir=juce::File::getSpecialLocation(juce::File::tempDirectory).getNonexistentChildFile("cosmos-assets","",false);
     if(!dir.createDirectory())return false;
@@ -97,8 +108,16 @@ bool qualifyImports(){
     ok=ok&&!cosmosTestImport(*restored,dir.getChildFile("missing.wav"),true);
     ok=file.deleteFile()&&ok;
     restored->setStateInformation(state.getData(),int(state.getSize()));ok=ok&&cosmosTestAssets(*restored,false);
+    auto af=dir.getChildFile("cycle.aiff");
+    auto ai=std::unique_ptr<juce::AudioProcessor>(createPluginFilter());
+    ok=aiff(std::filesystem::path(af.getFullPathName().toStdString()),cycle)&&ok;
+    ok=cosmosTestImport(*ai,af,false)&&ok;
+    juce::MemoryBlock aiState;ai->getStateInformation(aiState);
+    auto aiRestored=std::unique_ptr<juce::AudioProcessor>(createPluginFilter());
+    aiRestored->setStateInformation(aiState.getData(),int(aiState.getSize()));
+    ok=cosmosTestImport(*aiRestored,af,false)&&ok;
     dir.deleteRecursively();
-    std::cout<<"Personal WAV/table import and repeated restore: "<<(ok?"passed":"FAILED")<<'\n';
+    std::cout<<"Personal WAV/AIFF/table import and repeated restore: "<<(ok?"passed":"FAILED")<<'\n';
     return ok;
 }
 int main(){
@@ -130,5 +149,8 @@ int main(){
     std::cout<<200-failed<<"/200 presets passed automated DSP/state checks\n";
     bool qualified=qualifyProcessor(*a,*b,*ma,*mb);
     bool imported=qualifyImports();
-    return failed||!report||!qualified||!imported?1:0;
+    auto guiDir=juce::File::getCurrentWorkingDirectory().getChildFile("cosmos-ui-qa");
+    bool layout=guiDir.createDirectory().wasOk()&&cosmosTestLayout(*a,guiDir);
+    std::cout<<"Editor geometry and nine screenshots: "<<(layout?"passed":"FAILED")<<'\n';
+    return failed||!report||!qualified||!imported||!layout?1:0;
 }

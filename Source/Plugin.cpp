@@ -465,6 +465,21 @@ public:
     selectLayer(0);setOscPage(false);timerCallback();startTimerHz(20);
     setResizable(true,true);setResizeLimits(900,570,1800,1140);if(auto* c=getConstrainer())c->setFixedAspectRatio(1200./760.);setSize(1200,760);
   }
+  #ifdef COSMOS_PRESET_QA
+  bool qualifyLayout(const juce::File& folder){
+    bool ok=true;
+    for(int width:{900,1200,1800})for(int page=0;page<3;++page){
+      setSize(width,int(width*760./1200.));grainPage=page==2;setOscPage(page!=0);timerCallback();
+      for(int i=0;i<canvas.getNumChildComponents();++i){auto* a=canvas.getChildComponent(i);if(!a->isVisible())continue;
+        ok&=canvas.getLocalBounds().contains(a->getBounds());
+        for(int j=i+1;j<canvas.getNumChildComponents();++j){auto* b=canvas.getChildComponent(j);if(b->isVisible()&&a->getBounds().intersects(b->getBounds())){ok=false;juce::Logger::writeToLog("Layout overlap: "+a->getName()+" / "+b->getName());}}
+      }
+      auto image=createComponentSnapshot(getLocalBounds());auto file=folder.getChildFile(juce::String(width)+"-page-"+juce::String(page)+".png");
+      juce::FileOutputStream out(file);juce::PNGImageFormat png;ok&=out.openedOk()&&png.writeImageToStream(image,out);
+    }
+    return ok;
+  }
+  #endif
   ~Editor()override{stopTimer();browser.setModel(nullptr);setLookAndFeel(nullptr);}
   void paint(juce::Graphics& g)override{
     g.fillAll(ink);auto sc=float(getWidth())/1200.f;g.addTransform(juce::AffineTransform::scale(sc));
@@ -479,7 +494,7 @@ public:
     g.setColour(cyan);g.setFont(17);g.drawText("BIBLIOTHÈQUE  /  200",25,162,242,28,juce::Justification::centred);
     g.setColour(juce::Colour(0xff35495e));if(!oscPage)for(int j=0;j<8;++j)g.drawRoundedRectangle(310.f+216.f*(j%4),316.f+180.f*(j/4),204.f,168.f,6.f,1.f);
     if(oscPage)for(int j=0;j<10;++j)g.drawRoundedRectangle(310.f+172.f*(j%5),449.f+132.f*(j/5),164.f,126.f,6.f,1.f);
-    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.3.14  COSMOS MASTER VALIDATION  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
+    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.3.15  COSMOS ENGINE FINAL CONTROL  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
   }
   void resized()override{
     canvas.setTransform(juce::AffineTransform::scale(float(getWidth())/1200.f));canvas.setBounds(0,0,1200,760);
@@ -508,5 +523,6 @@ juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter(){return new Processor();
 void cosmosSetReferenceDSP(juce::AudioProcessor& p,bool ref){static_cast<Processor&>(p).referenceDSPForQA=ref;}
 bool cosmosTestImport(juce::AudioProcessor& p,const juce::File& f,bool table){auto& x=static_cast<Processor&>(p);return (table?x.loadTable(0,f):x.loadSample(0,f)).isEmpty();}
 bool cosmosTestAssets(juce::AudioProcessor& p,bool expected){auto& x=static_cast<Processor&>(p);return (x.samples[0].load()!=nullptr)==expected&&(x.tables[0].load()!=nullptr)==expected;}
+bool cosmosTestLayout(juce::AudioProcessor& p,const juce::File& dir){std::unique_ptr<juce::AudioProcessorEditor> editor(p.createEditor());return static_cast<Editor&>(*editor).qualifyLayout(dir);}
 bool cosmosTestCache(juce::AudioProcessor& p){auto& x=static_cast<Processor&>(p);return x.retainedSamples.size()==1&&x.retainedTables.size()==1;}
 #endif

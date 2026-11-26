@@ -43,6 +43,7 @@ jobs:
             cosmos-presets.csv
             cosmos-processor-qualification.csv
             cosmos-preset-audio/
+            cosmos-ui-qa/
           if-no-files-found: warn
       - name: DSP benchmark
         shell: bash
@@ -98,12 +99,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
         with:
-          name: Omniscience-v0.3.14-macOS-ARM64
+          name: Omniscience-v0.3.15-macOS-ARM64
           path: Omniscience-macOS-ARM64.zip
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
-          name: Omniscience-v0.3.14-Windows-x64
+          name: Omniscience-v0.3.15-Windows-x64
           path: Omniscience-Windows-x64.zip
           if-no-files-found: error
