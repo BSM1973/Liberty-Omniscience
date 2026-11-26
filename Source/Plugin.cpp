@@ -141,8 +141,17 @@ public:
   bool isBusesLayoutSupported(const BusesLayout& l)const override{return l.getMainOutputChannelSet()==juce::AudioChannelSet::stereo();}
   void prepareToPlay(double sr,int)override{engine.prepare(sr);}
   void releaseResources()override{engine.reset();}
+  bool referenceDSPForQA=false;
   cosmos::Patch patch() const {
     cosmos::Patch p;p.master=master->load();
+    p.experimentalGrouped=true;p.experimentalTiled=true;p.experimentalInterpolation=1;
+#if defined(_M_X64)
+    p.experimentalInterpolation=2;
+#endif
+#if defined(__aarch64__)
+    p.experimentalGrainWindow=true;p.experimentalGrainPrepared=true;
+#endif
+    if(referenceDSPForQA){p.experimentalGrouped=false;p.experimentalTiled=false;p.experimentalInterpolation=0;p.experimentalGrainWindow=false;p.experimentalGrainPrepared=false;}
     for(int k=0;k<4;++k){auto& l=p.layer[k];auto& a=params[k];l.enabled=a[0]->load()>.5f;l.wave=int(a[1]->load());l.gain=a[2]->load();l.pan=a[3]->load();l.tune=a[4]->load();l.cutoff=a[5]->load();l.attack=a[6]->load();l.decay=a[7]->load();l.sustain=a[8]->load();l.release=a[9]->load();l.sample=samples[k].load(std::memory_order_acquire);
       for(int o=0;o<5;++o){
         const auto& q=oscillators[k][o];auto& v=l.osc[o];v.mode=cosmos::OscMode(int(q[0]->load()));v.wave=int(q[1]->load());v.level=q[2]->load();v.tune=q[3]->load();v.unison=int(q[4]->load());v.detune=q[5]->load();v.drift=q[6]->load();v.morph=q[7]->load();v.ratio=q[8]->load();v.depth=q[9]->load();v.drive=q[10]->load();v.sync=q[11]->load()>.5f;v.ring=q[12]->load()>.5f;
@@ -480,3 +489,7 @@ public:
 juce::AudioProcessorEditor* Processor::createEditor(){return new Editor(*this);}
 }
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter(){return new Processor();}
+
+#ifdef COSMOS_PRESET_QA
+void cosmosSetReferenceDSP(juce::AudioProcessor& p,bool ref){static_cast<Processor&>(p).referenceDSPForQA=ref;}
+#endif

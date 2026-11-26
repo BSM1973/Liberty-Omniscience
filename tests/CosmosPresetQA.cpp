@@ -9,6 +9,7 @@
 #include <algorithm>
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
+void cosmosSetReferenceDSP(juce::AudioProcessor&,bool);
 constexpr int block=128, blocks=375, frames=block*blocks;
 constexpr double sr=48000.;
 struct Render {std::vector<float> data;double rms=0;float peak=0;bool finite=true;};
@@ -43,10 +44,11 @@ int main(){
         for(auto* x:p.getParameters())if(auto* id=dynamic_cast<juce::AudioProcessorParameterWithID*>(x))if(id->paramID=="master")return x;
         return nullptr;
     };
+    cosmosSetReferenceDSP(*b,true);
     auto* ma=master(*a);auto* mb=master(*b);if(!ma||!mb||a->getNumPrograms()!=200)return 1;
     std::filesystem::create_directories("cosmos-preset-audio");
     std::ofstream report("cosmos-presets.csv");
-    report<<"preset,name,rms,peak,finite,state_max_error,automation_restored,passed\n";
+    report<<"preset,name,rms,peak,finite,reference_state_max_error,automation_restored,passed\n";
     int failed=0;
     for(int i=0;i<a->getNumPrograms();++i){
         a->setCurrentProgram(i);ma->beginChangeGesture();ma->setValueNotifyingHost(.61f);ma->endChangeGesture();
@@ -55,7 +57,7 @@ int main(){
         auto r=render(*a),s=render(*b);float maxError=0;
         for(size_t j=0;j<r.data.size();++j)maxError=std::max(maxError,std::abs(r.data[j]-s.data[j]));
         bool restored=std::abs(mb->getValue()-.61f)<1e-5f&&b->getCurrentProgram()==i;
-        bool ok=r.finite&&s.finite&&r.rms>1e-7&&r.peak<=1.00001f&&maxError<1e-5f&&restored;
+        bool ok=r.finite&&s.finite&&r.rms>1e-7&&r.peak<=1.00001f&&maxError<1e-4f&&restored;
         auto name=std::to_string(i+1);name.insert(0,3-name.size(),'0');
         ok=wav(std::filesystem::path("cosmos-preset-audio")/(name+".wav"),r)&&ok;
         report<<i+1<<",\""<<a->getProgramName(i).toStdString()<<"\","<<r.rms<<','<<r.peak<<','<<r.finite<<','<<maxError<<','<<restored<<','<<ok<<'\n';

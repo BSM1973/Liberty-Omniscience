@@ -68,3 +68,6 @@ Cache base pitch and tune per oscillator, including reference path with identica
 
 ## v0.3.7 MULTICORE ENGINE candidate
 Offline experimental 2/4-worker persistent pool, fixed per-voice stereo buffers, disjoint voice ranges, ordered reduction and A/B tests. Blocking mutex/condition-variable barrier explicitly not suitable for realtime callback; never instantiated in plugin. No thread scheduling or performance guarantee. Benchmarks compare single-thread and worker variants, including 60s rendered audio. v0.3.5 verified 200/200 and native SIMD A/B; HD best 217.974% macOS and 130.362% Windows. v0.3.6 pending. No change to voice budget. Manual listening/UI/host qualification pending.
+
+## v0.3.8 REALTIME PERFECTION candidate
+Activate qualified single-thread tiled interpolation on macOS NEON and Windows runtime AVX2/SSE2 fallback, with original scalar paths for unsupported modulation. Apple-only granular LUT/prepared path based on v0.3.6 measurements; Windows retains reference granular. Processor QA compares optimized output against reference processor after state restore (peak error tolerance 1e-4). Offline worker pool remains outside plugin. Native build and full preset comparison pending; no real-time deadline guarantee or Apple Audio Workgroup integration. Manual listening, GUI and host testing remain outstanding.
