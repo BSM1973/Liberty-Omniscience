@@ -36,7 +36,9 @@ jobs:
           test -d AU/Omniscience.component
           test -d VST3/Omniscience.vst3
           test -d Standalone/Omniscience.app
-          lipo -verify_arch arm64 AU/Omniscience.component/Contents/MacOS/Omniscience
+          for binary in AU/Omniscience.component/Contents/MacOS/Omniscience VST3/Omniscience.vst3/Contents/MacOS/Omniscience Standalone/Omniscience.app/Contents/MacOS/Omniscience; do
+            lipo "$binary" -verify_arch arm64
+          done
           mkdir -p "$RUNNER_TEMP/omniscience"
           ditto AU/Omniscience.component "$RUNNER_TEMP/omniscience/Omniscience.component"
           ditto VST3/Omniscience.vst3 "$RUNNER_TEMP/omniscience/Omniscience.vst3"
