@@ -1,0 +1,26 @@
+#include "CosmosEngine.h"
+#include <iostream>
+#include <vector>
+#include <cstdlib>
+void check(bool ok,const char* what){if(!ok){std::cerr<<what<<"\n";std::exit(1);}}
+int main(){
+ for(double sr:{44100.,48000.,96000.}){
+  cosmos::Engine e;e.prepare(sr);cosmos::Patch p;
+  for(int k=0;k<4;++k){p.layer[k].wave=k;p.layer[k].release=.04f;}
+  std::vector<float> l(4096),r(4096);
+  e.noteOn(0,69,1);e.render(l.data(),r.data(),4096,p);
+  double energy=0;for(auto x:l){check(std::isfinite(x),"finite output");energy+=x*x;}check(energy>.01,"audible output");
+  e.noteOff(0,69);for(int i=0;i<4;++i){std::fill(l.begin(),l.end(),0);std::fill(r.begin(),r.end(),0);e.render(l.data(),r.data(),4096,p);}
+  check(std::all_of(l.begin(),l.end(),[](float x){return x==0;}),"release silence");
+  e.reset();for(auto& a:p.layer)a.enabled=false;e.noteOn(0,60,1);e.render(l.data(),r.data(),4096,p);
+  check(std::all_of(l.begin(),l.end(),[](float x){return x==0;}),"disabled layers silence");
+  e.reset();p.layer[0].enabled=true;p.layer[0].pan=-1;e.noteOn(0,60,1);e.render(l.data(),r.data(),4096,p);
+  check(std::all_of(r.begin(),r.end(),[](float x){return std::abs(x)<1e-7f;}),"hard left");
+  e.reset();std::fill(l.begin(),l.end(),0);std::fill(r.begin(),r.end(),0);p.layer[0].pan=0;
+  e.noteOn(0,60,1);e.sustain(0,true);e.noteOff(0,60);e.render(l.data(),r.data(),4096,p);
+  check(std::any_of(l.begin(),l.end(),[](float x){return std::abs(x)>1e-5f;}),"sustain pedal");
+  e.sustain(0,false);for(int i=0;i<4;++i){std::fill(l.begin(),l.end(),0);std::fill(r.begin(),r.end(),0);e.render(l.data(),r.data(),4096,p);}
+  check(std::all_of(l.begin(),l.end(),[](float x){return x==0;}),"pedal release");
+ }
+ std::cout<<"Cosmos foundation tests passed\n";
+}

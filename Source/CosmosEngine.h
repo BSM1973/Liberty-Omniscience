@@ -1,0 +1,114 @@
+#pragma once
+#include <array>
+#include <algorithm>
+#include <cmath>
+#include <numbers>
+#include <cstdint>
+
+namespace cosmos {
+constexpr int layers = 4, voices = 32;
+constexpr double pi = std::numbers::pi_v<double>;
+struct Layer {
+    bool enabled = true;
+    int wave = 0;
+    float gain=.45f, pan=0, tune=0, cutoff=12000, attack=.025f, decay=.35f, sustain=.8f, release=.5f;
+};
+struct Patch { std::array<Layer,layers> layer{}; float master=.7f; };
+inline float blep(double p, double dt) noexcept {
+    if(dt<=0) return 0;
+    if(p<dt){ p/=dt; return float(p+p-p*p-1); }
+    if(p>1-dt){ p=(p-1)/dt; return float(p*p+p+p+1); }
+    return 0;
+}
+inline float oscillator(int wave, double p, double dt) noexcept {
+    switch(wave){
+      case 1: return float(2*p-1)-blep(p,dt);
+      case 2: return (p<.5?1.f:-1.f)+blep(p,dt)-blep(std::fmod(p+.5,1.),dt);
+      case 3: return float(1-4*std::abs(p-.5));
+      default: return float(std::sin(2*pi*p));
+    }
+}
+struct Env {
+    enum Stage { attack, decay, sustain, release, off };
+    Stage stage=off; float level=0, releaseStart=0;
+    void start() noexcept { level=0; stage=attack; }
+    void stop() noexcept { if(stage!=off && stage!=release){releaseStart=level;stage=release;} }
+    float tick(const Layer& p,double sr) noexcept {
+      auto samples=[sr](float t){return float(std::max(1.,sr*double(t)));};
+      switch(stage){
+        case attack: level+=1/samples(p.attack); if(level>=1){level=1;stage=decay;} break;
+        case decay: level-= (1-p.sustain)/samples(p.decay); if(level<=p.sustain){level=p.sustain;stage=sustain;} break;
+        case sustain: level=p.sustain; break;
+        case release: level-=releaseStart/samples(p.release); if(level<=.000001f){level=0;stage=off;} break;
+        case off: level=0; break;
+      }
+      return level;
+    }
+};
+struct Voice {
+    bool active=false, held=false;
+    int note=0, channel=0; float velocity=0;
+    std::uint64_t age=0;
+    std::array<double,layers> phase{};
+    std::array<float,layers> low{};
+    std::array<Env,layers> env{};
+    void stop() noexcept {held=false;for(auto& e:env)e.stop();}
+};
+class Engine {
+    double sr=48000;
+    std::uint64_t counter=0;
+    std::array<Voice,voices> v{};
+    std::array<bool,16> pedal{};
+    std::array<float,16> bend{};
+public:
+    void prepare(double rate) noexcept {sr=std::max(8000.,rate);reset();}
+    void reset() noexcept {v={};pedal={};bend={};counter=0;}
+    void noteOn(int ch,int note,float velocity) noexcept {
+      if(ch<0||ch>=16)return;
+      if(velocity<=0){noteOff(ch,note);return;}
+      Voice* w=nullptr;
+      for(auto& a:v)if(!a.active){w=&a;break;}
+      if(!w)w=&*std::min_element(v.begin(),v.end(),[](const Voice& a,const Voice& b){if(a.held!=b.held)return !a.held;return a.age<b.age;});
+      *w=Voice{}; w->active=w->held=true;w->note=note;w->channel=ch;w->velocity=std::clamp(velocity,0.f,1.f);w->age=++counter;
+      for(auto& e:w->env)e.start();
+    }
+    void noteOff(int ch,int note) noexcept {
+      if(ch<0||ch>=16)return;
+      for(auto& a:v)if(a.active&&a.held&&a.channel==ch&&a.note==note){a.held=false;if(!pedal[ch])a.stop();}
+    }
+    void sustain(int ch,bool down) noexcept {
+      if(ch<0||ch>=16)return;
+      pedal[ch]=down;if(!down)for(auto& a:v)if(a.active&&a.channel==ch&&!a.held)a.stop();
+    }
+    void pitch(int ch,int value) noexcept {if(ch>=0&&ch<16)bend[ch]=2.f*float(value-8192)/8192.f;}
+    void allOff(int ch,bool immediate) noexcept {for(auto& a:v)if(a.active&&a.channel==ch){if(immediate)a=Voice{};else a.stop();}}
+    void render(float* left,float* right,int n,const Patch& patch) noexcept {
+      if(n<=0)return;
+      std::array<float,layers> alpha{},gl{},gr{};
+      for(int k=0;k<layers;++k){
+        const auto& p=patch.layer[k];
+        alpha[k]=float(1-std::exp(-2*pi*std::clamp(double(p.cutoff),20.,sr*.45)/sr));
+        double angle=(std::clamp(p.pan,-1.f,1.f)+1)*pi*.25;
+        float g=p.enabled?p.gain:0.f;gl[k]=g*float(std::cos(angle));gr[k]=g*float(std::sin(angle));
+      }
+      for(auto& a:v)if(a.active){
+        std::array<double,layers> dt{};
+        for(int k=0;k<layers;++k)dt[k]=std::clamp(440.*std::exp2((a.note-69+patch.layer[k].tune+bend[a.channel])/12.)/sr,0.,.45);
+        for(int i=0;i<n;++i){
+          float l=0,r=0;bool alive=false;
+          for(int k=0;k<layers;++k){
+            const auto& p=patch.layer[k];auto& e=a.env[k];
+            float env=e.tick(p,sr);alive|=e.stage!=Env::off;
+            if(e.stage==Env::off)continue;
+            float x=oscillator(p.wave,a.phase[k],dt[k]);
+            a.phase[k]+=dt[k];if(a.phase[k]>=1)a.phase[k]-=1;
+            a.low[k]+=alpha[k]*(x-a.low[k]);
+            float s=a.low[k]*env;l+=s*gl[k];r+=s*gr[k];
+          }
+          if(!alive){a.active=false;break;}
+          const float g=a.velocity*.12f*patch.master;left[i]+=l*g;right[i]+=r*g;
+        }
+      }
+    }
+};
+}

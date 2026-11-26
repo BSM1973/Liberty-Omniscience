@@ -1,0 +1,30 @@
+cmake_minimum_required(VERSION 3.22)
+project(LibertyOmniscience VERSION 0.1.0 LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+option(OMNI_PLUGIN "Build JUCE plugin" ON)
+enable_testing()
+add_executable(CosmosTests tests/CosmosTests.cpp)
+target_include_directories(CosmosTests PRIVATE Source)
+add_test(NAME CosmosFoundation COMMAND CosmosTests)
+if(OMNI_PLUGIN)
+  include(FetchContent)
+  FetchContent_Declare(JUCE GIT_REPOSITORY https://github.com/juce-framework/JUCE.git GIT_TAG 8.0.6 GIT_SHALLOW TRUE)
+  FetchContent_MakeAvailable(JUCE)
+  set(formats VST3 Standalone)
+  if(APPLE)
+    list(APPEND formats AU)
+  endif()
+  juce_add_plugin(Omniscience
+    COMPANY_NAME "Liberty Music Software"
+    BUNDLE_ID com.libertymusicsoftware.omniscience
+    PLUGIN_MANUFACTURER_CODE Lbty
+    PLUGIN_CODE Omns
+    PRODUCT_NAME "Omniscience"
+    IS_SYNTH TRUE NEEDS_MIDI_INPUT TRUE NEEDS_MIDI_OUTPUT FALSE
+    COPY_PLUGIN_AFTER_BUILD FALSE
+    FORMATS ${formats})
+  target_sources(Omniscience PRIVATE Source/Plugin.cpp)
+  target_compile_definitions(Omniscience PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
+  target_link_libraries(Omniscience PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+endif()
