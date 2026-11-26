@@ -1,0 +1,65 @@
+name: Omniscience - fast diagnostic
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS ARM64
+            os: macos-14
+            args: -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_BUILD_TYPE=Release
+          - name: Windows x64
+            os: windows-2022
+            args: -A x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build ${{ matrix.args }}
+      - name: Build
+        run: cmake --build build --config Release --parallel 3
+      - name: DSP tests
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Package macOS development binaries
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd build/Omniscience_artefacts/Release
+          test -d AU/Omniscience.component
+          test -d VST3/Omniscience.vst3
+          test -d Standalone/Omniscience.app
+          lipo -verify_arch arm64 AU/Omniscience.component/Contents/MacOS/Omniscience
+          mkdir -p "$RUNNER_TEMP/omniscience"
+          ditto AU/Omniscience.component "$RUNNER_TEMP/omniscience/Omniscience.component"
+          ditto VST3/Omniscience.vst3 "$RUNNER_TEMP/omniscience/Omniscience.vst3"
+          ditto Standalone/Omniscience.app "$RUNNER_TEMP/omniscience/Omniscience.app"
+          ditto -c -k --keepParent "$RUNNER_TEMP/omniscience" "$GITHUB_WORKSPACE/Omniscience-macOS-ARM64.zip"
+      - name: Package Windows development binaries
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $root = "build/Omniscience_artefacts/Release"
+          $vst = "$root/VST3/Omniscience.vst3"
+          $exe = "$root/Standalone/Omniscience.exe"
+          if (!(Test-Path $vst) -or !(Test-Path $exe)) { throw "Missing plugin binaries" }
+          Compress-Archive -Path $vst,$exe -DestinationPath Omniscience-Windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS'
+        with:
+          name: Omniscience-v0.1-macOS-ARM64
+          path: Omniscience-macOS-ARM64.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: Omniscience-v0.1-Windows-x64
+          path: Omniscience-Windows-x64.zip
+          if-no-files-found: error
