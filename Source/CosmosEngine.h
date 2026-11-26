@@ -131,11 +131,14 @@ public:
       }
       return out;
     }
+    bool voiceActive(int index)const noexcept{return index>=0&&index<voices&&v[size_t(index)].active;}
     void render(float* left,float* right,int n,const Patch& patch) noexcept {renderRange(left,right,n,patch,0,voices);}
     // Disjoint ranges may be processed concurrently with immutable patch and MIDI state.
     // Caller must join all tasks before modifying MIDI state or reading telemetry.
     void renderRange(float* left,float* right,int n,const Patch& patch,int first,int last) noexcept {
       if(n<=0)return;
+      bool any=false;for(int i=std::max(0,first);i<std::min(voices,last);++i)any|=v[size_t(i)].active;
+      if(!any)return;
       std::array<float,layers> alpha{},gl{},gr{};
       std::array<EnvPlan,layers> envelopes{};
       auto analog=patch.experimentalAnalog?fastOscillator:oscillator;

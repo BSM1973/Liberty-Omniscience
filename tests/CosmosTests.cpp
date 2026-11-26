@@ -212,5 +212,21 @@ int main(){
     check(std::sqrt(err/signal)<.0001,"coherent wavetable alias residual");
   }
  }
+ {
+  cosmos::Engine serial,parallel;serial.prepare(48000);parallel.prepare(48000);
+  cosmos::ParallelBench pool(parallel,4,128,true);
+  cosmos::Patch p;p.experimentalGrouped=true;p.experimentalTiled=true;p.experimentalInterpolation=2;
+  for(auto& layer:p.layer){layer.release=.005f;for(auto& o:layer.osc){o.mode=cosmos::OscMode::wavetable;o.level=.2f;o.tableSource=1;o.unison=4;}}
+  std::vector<float> l(128),r(128),ll(128),rr(128);
+  for(int b=0;b<80;++b){
+    if(b==1||b==30){serial.noteOn(0,60,.7f);parallel.noteOn(0,60,.7f);}
+    if(b==4)for(int i=0;i<8;++i){serial.noteOn(0,48+i,.7f);parallel.noteOn(0,48+i,.7f);}
+    if(b==15){serial.allOff(0,false);parallel.allOff(0,false);}
+    if(b==50){serial.allOff(0,true);parallel.allOff(0,true);}
+    for(auto* x:{&l,&r,&ll,&rr})std::fill(x->begin(),x->end(),0.f);
+    serial.render(l.data(),r.data(),128,p);pool.render(ll.data(),rr.data(),128,p);
+    for(int i=0;i<128;++i)check(std::abs(l[i]-ll[i])<1e-6f&&std::abs(r[i]-rr[i])<1e-6f,"compact active voice pool equivalence");
+  }
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }
