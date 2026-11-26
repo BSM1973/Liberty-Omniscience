@@ -3,7 +3,18 @@
 #include <vector>
 #include <cstdlib>
 void check(bool ok,const char* what){if(!ok){std::cerr<<what<<"\n";std::exit(1);}}
+static_assert(sizeof(cosmos::Engine)<4096,"Engine voice storage must not live on the stack");
 int main(){
+ {
+  cosmos::Engine e;e.prepare(48000);cosmos::Patch p;
+  for(auto& l:p.layer)for(auto& o:l.osc){o.mode=cosmos::OscMode::granular;o.level=.15f;o.grain.source=1;o.grain.size=30;o.grain.density=20;}
+  std::vector<float> l(128),r(128);
+  for(int i=0;i<64;++i)e.noteOn(0,36+i,.7f);
+  for(int b=0;b<16;++b){std::fill(l.begin(),l.end(),0);std::fill(r.begin(),r.end(),0);e.render(l.data(),r.data(),128,p);
+    check(std::all_of(l.begin(),l.end(),[](float x){return std::isfinite(x);}),"full voice pool finite");}
+  e.reset();std::fill(l.begin(),l.end(),0);std::fill(r.begin(),r.end(),0);e.render(l.data(),r.data(),128,p);
+  check(std::all_of(l.begin(),l.end(),[](float x){return x==0;}),"voice pool reset silence");
+ }
  for(double sr:{44100.,48000.,96000.}){
   cosmos::Engine e;e.prepare(sr);cosmos::Patch p;
   for(int k=0;k<4;++k){p.layer[k].wave=k;p.layer[k].release=.04f;}

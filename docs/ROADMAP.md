@@ -33,3 +33,6 @@ Les objectifs de 20 oscillateurs, 70 filtres, 100 effets, 64 slots de modulation
 - Taille, densité, position, dispersion, stretch par vitesse de balayage, freeze, blur (jitter de position et intervalle), reverse, jitter de hauteur, Hann/triangle/trapèze, densité relative au BPM, boucles normalisées et télémétrie de la première voix active.
 - 4 sources d'usine synthétiques originales; 100 patches paramétriques granulaires supplémentaires à écouter et différencier; 200 au total. Import WAV/AIFF conservé.
 - Limites : pas encore d'édition des boucles par glisser sur la forme d'onde, import wavetable utilisateur, extension 256 formes, SIMD NEON/AVX2 ni benchmarks temps réel. Ces éléments restent à réaliser. Pas de parité garantie avec la référence. Les tests et la compilation de ce candidat restent à lancer après validation v0.2.
+
+### Correctif v0.3 Windows
+Le build Windows compilait mais CosmosFoundation terminait en SEGFAULT. Cause probable : taille du pool de voix granulaire sur la pile. Pool fixe préalloué sur le tas dès la construction; aucune allocation dans noteOn, reset ou render. Tests historiques conservés, test de saturation/réinitialisation ajouté. Confirmation par CI requise.

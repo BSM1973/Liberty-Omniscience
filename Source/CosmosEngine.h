@@ -4,6 +4,7 @@
 #include <cmath>
 #include <numbers>
 #include <cstdint>
+#include <vector>
 #include "HybridOscillator.h"
 
 namespace cosmos {
@@ -62,7 +63,8 @@ struct Voice {
 class Engine {
     double sr=48000;
     std::uint64_t counter=0;
-    std::array<Voice,voices> v{};
+    // Allocate the fixed voice pool once, outside the audio callback.
+    std::vector<Voice> v = std::vector<Voice>(voices);
     std::array<bool,16> pedal{};
     std::array<float,16> bend{};
 public:
