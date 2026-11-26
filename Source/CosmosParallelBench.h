@@ -14,6 +14,7 @@ class ParallelBench {
     int workers,capacity;
     std::array<int,voices> active{};int activeCount=0;
     bool skipInactive=false;
+    int participating=1;
     std::array<std::vector<float>,voices> l,r;
     std::array<std::thread,maxWorkers-1> pool;
     std::mutex mutex;
@@ -23,7 +24,7 @@ class ParallelBench {
     bool stopping=false;
     const Patch* patch=nullptr;
     void runRange(int k) noexcept {
-      for(int j=k;j<(skipInactive?activeCount:voices);j+=workers){
+      for(int j=k;j<(skipInactive?activeCount:voices);j+=participating){
         int i=skipInactive?active[size_t(j)]:j;
         std::fill_n(l[i].data(),n,0.f);std::fill_n(r[i].data(),n,0.f);
         engine.renderRange(l[i].data(),r[i].data(),n,*patch,i,i+1);
@@ -32,7 +33,7 @@ class ParallelBench {
     void loop(int k){
       unsigned seen=0;
       for(;;){
-        {std::unique_lock lock(mutex);start.wait(lock,[&]{return stopping||generation!=seen;});if(stopping)return;seen=generation;}
+        {std::unique_lock lock(mutex);start.wait(lock,[&]{return stopping||generation!=seen;});if(stopping)return;seen=generation;if(k>=participating)continue;}
         runRange(k);
         {std::lock_guard lock(mutex);--remaining;}done.notify_one();
       }
@@ -57,7 +58,8 @@ public:
         if(skipInactive)for(int i=0;i<voices;++i)if(engine.voiceActive(i))active[size_t(activeCount++)]=i;
         if(skipInactive&&activeCount==0)return;
         if(skipInactive&&activeCount==1){engine.render(left,right,count,p);return;}
-        remaining=workers-1;++generation;}
+        participating=skipInactive?std::min(workers,activeCount):workers;
+        remaining=participating-1;++generation;}
       start.notify_all();runRange(0);
       {std::unique_lock lock(mutex);done.wait(lock,[&]{return remaining==0;});}
       // Original voice order, even when workers finish in a different order.

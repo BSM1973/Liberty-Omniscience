@@ -228,5 +228,18 @@ int main(){
     for(int i=0;i<128;++i)check(std::abs(l[i]-ll[i])<1e-6f&&std::abs(r[i]-rr[i])<1e-6f,"compact active voice pool equivalence");
   }
  }
+ {
+  cosmos::Engine serial,parallel;serial.prepare(48000);parallel.prepare(48000);
+  cosmos::ParallelBench pool(parallel,4,128,true);
+  cosmos::Patch p;
+  std::vector<float> l(128),r(128),ll(128),rr(128);
+  for(int block=0;block<80;++block){
+    if(block%8==0){serial.allOff(0,true);parallel.allOff(0,true);
+      for(int i=0;i<(block/8)%5;++i){serial.noteOn(0,48+i,.7f);parallel.noteOn(0,48+i,.7f);}}
+    for(auto* x:{&l,&r,&ll,&rr})std::fill(x->begin(),x->end(),0.f);
+    serial.render(l.data(),r.data(),128,p);pool.render(ll.data(),rr.data(),128,p);
+    for(int i=0;i<128;++i)check(std::abs(l[i]-ll[i])<1e-6f&&std::abs(r[i]-rr[i])<1e-6f,"adaptive worker count equivalence");
+  }
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }
