@@ -2,6 +2,7 @@
 #include <iostream>
 #include <vector>
 #include <cstdlib>
+#include <utility>
 void check(bool ok,const char* what){if(!ok){std::cerr<<what<<"\n";std::exit(1);}}
 static_assert(sizeof(cosmos::Engine)<4096,"Engine voice storage must not live on the stack");
 int main(){
@@ -84,5 +85,23 @@ int main(){
   double err=0;for(int i=0;i<cosmos::tableSize;++i){double phase=double(i)/cosmos::tableSize;double d=user.read(phase,.5f,.1)-.7*std::sin(2*cosmos::hpi*phase);err+=d*d;}
   check(std::sqrt(err/cosmos::tableSize)<.01,"band limiting high harmonics");
  }
- std::cout<<"Cosmos foundation, hybrid, granular and HD tests passed\n";
+ {
+  cosmos::Engine scalar,grouped;scalar.prepare(48000);grouped.prepare(48000);
+  cosmos::Patch a;for(auto& layer:a.layer)for(auto& o:layer.osc){o.mode=cosmos::OscMode::wavetable;o.tableSource=1;o.level=.2f;o.unison=16;o.detune=23;o.morph=.43f;}
+  auto b=a;b.experimentalGrouped=true;
+  for(int i=0;i<8;++i){scalar.noteOn(0,48+i,.7f);grouped.noteOn(0,48+i,.7f);}
+  std::vector<float> l(128),r(128),ll(128),rr(128);double err=0,ref=0;float peak=0;
+  for(int block=0;block<64;++block){
+    for(auto* v:{&l,&r,&ll,&rr})std::fill(v->begin(),v->end(),0.f);
+    if(block==32){scalar.pitch(0,10000);grouped.pitch(0,10000);}
+    scalar.render(l.data(),r.data(),128,a);grouped.render(ll.data(),rr.data(),128,b);
+    for(int i=0;i<128;++i){
+      for(auto pair:{std::pair<float,float>{l[i],ll[i]},std::pair<float,float>{r[i],rr[i]}}){
+        double d=pair.first-pair.second;err+=d*d;ref+=double(pair.first)*pair.first;peak=std::max(peak,std::abs(pair.first-pair.second));
+      }
+    }
+  }
+  check(ref>0&&std::sqrt(err/ref)<1e-5&&peak<1e-4f,"grouped engine equivalence");
+ }
+ std::cout<<"Cosmos foundation, hybrid, granular, HD and grouped A/B tests passed\n";
 }

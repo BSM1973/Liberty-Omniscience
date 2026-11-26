@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <complex>
 #include <stdexcept>
+#include "CosmosSIMD.h"
 #include "GranularEngine.h"
 
 namespace cosmos {
@@ -44,6 +45,7 @@ struct OscParams {
     bool sync=false, ring=false;
     GrainParams grain{};
     int tableSource=0;
+    bool experimentalGrouped=false;
     const HDTable* userTable=nullptr;
 };
 inline double wrap(double x) noexcept {return x-std::floor(x);}
@@ -165,6 +167,8 @@ inline float readTable(const OscParams& o,double phase,double delta) noexcept {
 struct HybridVoice {
     std::array<double,maxUnison> phase{}, mod{}, samplePos{}, driftPhase{};
     double syncPhase=0;
+    std::array<double,maxUnison> cachedDelta{};
+    double cacheBase=-1;float cacheDetune=-1;int cacheUnison=0;
     GrainVoice grain;
     void seed(int osc,int layer,int note,std::uint64_t age) noexcept {
         grain.seed(std::uint32_t(age*131u+note*17u+layer*41u+osc*71u+1u));
@@ -184,11 +188,29 @@ inline float sampleRead(const SampleData* s,double pos) noexcept {
     const auto i=std::size_t(pos),j=std::min(i+1,s->mono.size()-1);
     return std::lerp(s->mono[i],s->mono[j],float(pos-double(i)));
 }
+inline float renderGroupedTable(HybridVoice& v,const OscParams& o,double base,double noteDelta) noexcept {
+    int un=std::clamp(o.unison,1,maxUnison);
+    if(v.cacheBase!=base||v.cacheDetune!=o.detune||v.cacheUnison!=un){
+      for(int u=0;u<un;++u){
+        double spread=un==1?0.:2.*u/(un-1)-1.;
+        v.cachedDelta[u]=std::clamp(base*std::exp2(spread*o.detune/1200.),0.,.45);
+      }
+      v.cacheBase=base;v.cacheDetune=o.detune;v.cacheUnison=un;
+    }
+    v.syncPhase+=noteDelta;if(v.syncPhase>=1.)v.syncPhase-=1.;
+    float sum=0;
+    for(int u=0;u<un;++u)sum+=readTable(o,v.phase[u],v.cachedDelta[u]);
+    advancePhases(v.phase.data(),v.cachedDelta.data(),un);
+    for(int u=0;u<un;++u)v.mod[u]=wrap(v.mod[u]+std::min(.45,v.cachedDelta[u]*double(o.ratio)));
+    return sum*o.level/float(un);
+}
 template<class Analog>
 inline float renderHybrid(HybridVoice& v,const OscParams& o,const SampleData* sample,double noteDelta,double sr,Analog analog,double bpm=120.) noexcept {
     if(o.level<=0)return 0;
     int un=std::clamp(o.unison,1,maxUnison);
     const double base=std::clamp(noteDelta*std::exp2(double(o.tune)/12.),0.,.45);
+    if(o.experimentalGrouped&&o.mode==OscMode::wavetable&&o.drift==0&&!o.sync&&!o.ring&&o.drive==0)
+        return renderGroupedTable(v,o,base,noteDelta);
     if(o.mode==OscMode::granular){
         float x=renderGrains(v.grain,o.grain,sample,base*sr/261.625565,sr,bpm);
         if(o.ring){x*=float(std::sin(2*hpi*v.mod[0]));v.mod[0]=wrap(v.mod[0]+std::min(.45,base*double(o.ratio)));}

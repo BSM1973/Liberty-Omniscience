@@ -18,7 +18,7 @@ struct Layer {
     const SampleData* sample=nullptr;
     Layer(){osc[0].level=1;}
 };
-struct Patch { std::array<Layer,layers> layer{}; float master=.7f; double bpm=120.; };
+struct Patch { std::array<Layer,layers> layer{}; float master=.7f; double bpm=120.; bool experimentalGrouped=false; };
 inline float blep(double p, double dt) noexcept {
     if(dt<=0) return 0;
     if(p<dt){ p/=dt; return float(p+p-p*p-1); }
@@ -103,8 +103,15 @@ public:
     void render(float* left,float* right,int n,const Patch& patch) noexcept {
       if(n<=0)return;
       std::array<float,layers> alpha{},gl{},gr{};
+      std::array<std::array<OscParams,oscillatorCount>,layers> prepared{};
+      std::array<std::array<const SampleData*,oscillatorCount>,layers> sources{};
       for(int k=0;k<layers;++k){
         const auto& p=patch.layer[k];
+        for(int o=0;o<oscillatorCount;++o){
+          prepared[k][o]=p.osc[o];auto& x=prepared[k][o];x.experimentalGrouped=patch.experimentalGrouped;
+          if(o==0)x.wave=p.wave;
+          sources[k][o]=x.mode==OscMode::granular&&x.grain.source>0&&x.grain.source<=4?&factoryGrains()[size_t(x.grain.source-1)]:p.sample;
+        }
         alpha[k]=float(1-std::exp(-2*pi*std::clamp(double(p.cutoff),20.,sr*.45)/sr));
         double angle=(std::clamp(p.pan,-1.f,1.f)+1)*pi*.25;
         float g=p.enabled?p.gain:0.f;gl[k]=g*float(std::cos(angle));gr[k]=g*float(std::sin(angle));
@@ -124,12 +131,11 @@ public:
               a.phase[k]+=dt[k];if(a.phase[k]>=1)a.phase[k]-=1;
               a.hybrid[k][0].phase[0]=a.phase[k];
             }else{
-              auto primary=p.osc[0];primary.wave=p.wave;
-              x=renderHybrid(a.hybrid[k][0],primary,primary.grain.source>0&&primary.mode==OscMode::granular?&factoryGrains()[size_t(primary.grain.source-1)]:p.sample,dt[k],sr,oscillator,patch.bpm);
+              x=renderHybrid(a.hybrid[k][0],prepared[k][0],sources[k][0],dt[k],sr,oscillator,patch.bpm);
               a.phase[k]=a.hybrid[k][0].phase[0];
             }
             for(int o=1;o<oscillatorCount;++o)if(p.osc[o].level>0)
-              x+=renderHybrid(a.hybrid[k][o],p.osc[o],p.osc[o].grain.source>0&&p.osc[o].mode==OscMode::granular?&factoryGrains()[size_t(p.osc[o].grain.source-1)]:p.sample,dt[k],sr,oscillator,patch.bpm);
+              x+=renderHybrid(a.hybrid[k][o],prepared[k][o],sources[k][o],dt[k],sr,oscillator,patch.bpm);
             a.low[k]+=alpha[k]*(x-a.low[k]);
             float s=a.low[k]*env;l+=s*gl[k];r+=s*gr[k];
           }

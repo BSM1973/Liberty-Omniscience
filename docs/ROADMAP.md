@@ -41,3 +41,7 @@ Les objectifs de 20 oscillateurs, 70 filtres, 100 effets, 64 slots de modulation
 - SIMD NEON/SSE2/AVX2 non activé ni implémenté, contrôle DAW et visuel restant. Aucun résultat de compilation ni de benchmark acquis avant exécution CI.
 
 Le correctif Windows v0.3 (pool fixe sur le tas) et son test de saturation sont repris de 125812e1.
+
+## v0.3.2 — COSMOS ENGINE OPTIMIZATION (candidate)
+- Hoist oscillator preparation and sample-source resolution outside the sample loop. Optional grouped wavetable unison path caches increments, uses ARM64 NEON or x64 SSE2 phase update; scalar fallback. Grouped path remains disabled in plugin, only enabled by benchmark/test. No AVX2 implementation yet.
+- Full-engine scalar/grouped A/B test including pitch bend. Short CPU benchmark on 1/8/32 voices, endurance 60 seconds of rendered audio for 32-voice granular and grouped HD. Results not available until CI; no realtime guarantee. HD memory compression, preset listening, host automation and graphical validation remain pending.

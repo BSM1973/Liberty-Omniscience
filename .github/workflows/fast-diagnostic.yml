@@ -36,10 +36,21 @@ jobs:
             ./build/CosmosBenchmark > cosmos-benchmark.csv
           fi
           cat cosmos-benchmark.csv
+      - name: DSP endurance (60 seconds rendered audio per scenario)
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            ./build/Release/CosmosBenchmark.exe --long > cosmos-endurance.csv
+          else
+            ./build/CosmosBenchmark --long > cosmos-endurance.csv
+          fi
+          cat cosmos-endurance.csv
       - uses: actions/upload-artifact@v4
         with:
           name: Cosmos-benchmark-${{ matrix.name }}
-          path: cosmos-benchmark.csv
+          path: |
+            cosmos-benchmark.csv
+            cosmos-endurance.csv
           if-no-files-found: error
       - name: Package macOS development binaries
         if: runner.os == 'macOS'
@@ -70,12 +81,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
         with:
-          name: Omniscience-v0.3.1-macOS-ARM64
+          name: Omniscience-v0.3.2-macOS-ARM64
           path: Omniscience-macOS-ARM64.zip
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
-          name: Omniscience-v0.3.1-Windows-x64
+          name: Omniscience-v0.3.2-Windows-x64
           path: Omniscience-Windows-x64.zip
           if-no-files-found: error
