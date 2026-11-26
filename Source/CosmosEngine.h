@@ -4,6 +4,7 @@
 #include <cmath>
 #include <numbers>
 #include <cstdint>
+#include "HybridOscillator.h"
 
 namespace cosmos {
 constexpr int layers = 4, voices = 32;
@@ -12,6 +13,9 @@ struct Layer {
     bool enabled = true;
     int wave = 0;
     float gain=.45f, pan=0, tune=0, cutoff=12000, attack=.025f, decay=.35f, sustain=.8f, release=.5f;
+    std::array<OscParams,oscillatorCount> osc{};
+    const SampleData* sample=nullptr;
+    Layer(){osc[0].level=1;}
 };
 struct Patch { std::array<Layer,layers> layer{}; float master=.7f; };
 inline float blep(double p, double dt) noexcept {
@@ -52,6 +56,7 @@ struct Voice {
     std::array<double,layers> phase{};
     std::array<float,layers> low{};
     std::array<Env,layers> env{};
+    std::array<std::array<HybridVoice,oscillatorCount>,layers> hybrid{};
     void stop() noexcept {held=false;for(auto& e:env)e.stop();}
 };
 class Engine {
@@ -61,8 +66,8 @@ class Engine {
     std::array<bool,16> pedal{};
     std::array<float,16> bend{};
 public:
-    void prepare(double rate) noexcept {sr=std::max(8000.,rate);reset();}
-    void reset() noexcept {v={};pedal={};bend={};counter=0;}
+    void prepare(double rate) noexcept {sr=std::max(8000.,rate);(void)waveBank();reset();}
+    void reset() noexcept {for(auto& voice:v)voice=Voice{};pedal={};bend={};counter=0;}
     void noteOn(int ch,int note,float velocity) noexcept {
       if(ch<0||ch>=16)return;
       if(velocity<=0){noteOff(ch,note);return;}
@@ -71,6 +76,7 @@ public:
       if(!w)w=&*std::min_element(v.begin(),v.end(),[](const Voice& a,const Voice& b){if(a.held!=b.held)return !a.held;return a.age<b.age;});
       *w=Voice{}; w->active=w->held=true;w->note=note;w->channel=ch;w->velocity=std::clamp(velocity,0.f,1.f);w->age=++counter;
       for(auto& e:w->env)e.start();
+      for(int k=0;k<layers;++k)for(int o=0;o<oscillatorCount;++o)w->hybrid[k][o].seed(o,k,note,w->age);
     }
     void noteOff(int ch,int note) noexcept {
       if(ch<0||ch>=16)return;
@@ -100,8 +106,18 @@ public:
             const auto& p=patch.layer[k];auto& e=a.env[k];
             float env=e.tick(p,sr);alive|=e.stage!=Env::off;
             if(e.stage==Env::off)continue;
-            float x=oscillator(p.wave,a.phase[k],dt[k]);
-            a.phase[k]+=dt[k];if(a.phase[k]>=1)a.phase[k]-=1;
+            float x=0;
+            if(legacy(p.osc[0])){
+              x=oscillator(p.wave,a.phase[k],dt[k]);
+              a.phase[k]+=dt[k];if(a.phase[k]>=1)a.phase[k]-=1;
+              a.hybrid[k][0].phase[0]=a.phase[k];
+            }else{
+              auto primary=p.osc[0];primary.wave=p.wave;
+              x=renderHybrid(a.hybrid[k][0],primary,p.sample,dt[k],sr,oscillator);
+              a.phase[k]=a.hybrid[k][0].phase[0];
+            }
+            for(int o=1;o<oscillatorCount;++o)if(p.osc[o].level>0)
+              x+=renderHybrid(a.hybrid[k][o],p.osc[o],p.sample,dt[k],sr,oscillator);
             a.low[k]+=alpha[k]*(x-a.low[k]);
             float s=a.low[k]*env;l+=s*gl[k];r+=s*gr[k];
           }

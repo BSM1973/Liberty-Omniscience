@@ -22,5 +22,28 @@ int main(){
   e.sustain(0,false);for(int i=0;i<4;++i){std::fill(l.begin(),l.end(),0);std::fill(r.begin(),r.end(),0);e.render(l.data(),r.data(),4096,p);}
   check(std::all_of(l.begin(),l.end(),[](float x){return x==0;}),"pedal release");
  }
- std::cout<<"Cosmos foundation tests passed\n";
+ {
+  const auto& bank=cosmos::waveBank();
+  check(std::abs(bank.read(0,0,.001)-bank.read(1,0,.001))<1e-6f,"wavetable wrap");
+  check(std::abs(bank.read(.21,0,.001)-bank.read(.21,.65f,.001))>.001f,"wavetable morph");
+  cosmos::Engine e;e.prepare(48000);cosmos::Patch p;
+  for(auto& l:p.layer)l.enabled=false;p.layer[0].enabled=true;p.layer[0].attack=.001f;
+  std::vector<float> l(4096),r(4096);
+  for(int mode=0;mode<4;++mode){
+    e.reset();std::fill(l.begin(),l.end(),0);std::fill(r.begin(),r.end(),0);
+    auto& o=p.layer[0].osc[0];o.mode=cosmos::OscMode(mode);o.unison=16;o.detune=18;o.drift=3;o.morph=.5f;o.depth=.6f;o.drive=.2f;o.sync=true;o.ring=true;
+    e.noteOn(0,60,1);e.render(l.data(),r.data(),4096,p);
+    double energy=0;for(float x:l){check(std::isfinite(x),"hybrid finite");energy+=x*x;}check(energy>.0001,"hybrid audible");
+  }
+  cosmos::SampleData sample;sample.rate=48000;sample.mono.assign(48000,.5f);p.layer[0].sample=&sample;
+  auto& o=p.layer[0].osc[0];o={};o.level=1;o.mode=cosmos::OscMode::sample;
+  e.reset();std::fill(l.begin(),l.end(),0);std::fill(r.begin(),r.end(),0);e.noteOn(0,60,1);e.render(l.data(),r.data(),4096,p);
+  check(std::any_of(l.begin(),l.end(),[](float x){return x>.001f;}),"sample playback");
+  p.layer[0].sample=nullptr;e.reset();std::fill(l.begin(),l.end(),0);std::fill(r.begin(),r.end(),0);e.noteOn(0,60,1);e.render(l.data(),r.data(),4096,p);
+  check(std::all_of(l.begin(),l.end(),[](float x){return x==0;}),"missing sample silence");
+  o.level=0;auto& extra=p.layer[0].osc[4];extra.level=1;extra.mode=cosmos::OscMode::wavetable;
+  e.reset();e.noteOn(0,60,1);e.render(l.data(),r.data(),4096,p);
+  check(std::any_of(l.begin(),l.end(),[](float x){return std::abs(x)>.001f;}),"fifth oscillator audible");
+ }
+ std::cout<<"Cosmos foundation and hybrid tests passed\n";
 }
