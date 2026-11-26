@@ -65,3 +65,6 @@ Le correctif Windows v0.3 (pool fixe sur le tas) et son test de saturation sont 
 
 ## v0.3.6 HYPER ENGINE (candidate)
 Cache base pitch and tune per oscillator, including reference path with identical arithmetic. Experimental granular plan caches loop bounds, pitch scale, spawn interval and normalization, combined with Hann LUT in benchmarks and A/B. No adaptive voice reduction. v0.3.4 verified green; best 32-note HD 617.952% macOS grouped and 1144.54% Windows tiled; 200/200 automated presets on both. v0.3.5 native SIMD interpolation still pending, no backend activation until results. Manual listening/UI/DAW and multicore implementation remain pending.
+
+## v0.3.7 MULTICORE ENGINE candidate
+Offline experimental 2/4-worker persistent pool, fixed per-voice stereo buffers, disjoint voice ranges, ordered reduction and A/B tests. Blocking mutex/condition-variable barrier explicitly not suitable for realtime callback; never instantiated in plugin. No thread scheduling or performance guarantee. Benchmarks compare single-thread and worker variants, including 60s rendered audio. v0.3.5 verified 200/200 and native SIMD A/B; HD best 217.974% macOS and 130.362% Windows. v0.3.6 pending. No change to voice budget. Manual listening/UI/host qualification pending.

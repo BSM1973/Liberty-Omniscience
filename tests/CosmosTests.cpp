@@ -1,4 +1,5 @@
 #include "CosmosEngine.h"
+#include "CosmosParallelBench.h"
 #include <iostream>
 #include <vector>
 #include <cstdlib>
@@ -166,6 +167,22 @@ int main(){
     for(int i=0;i<128;++i){double d=l[i]-ll[i];err+=d*d;ref+=double(l[i])*l[i];}
   }
   check(ref>0&&std::sqrt(err/ref)<1e-5,"granular LUT engine equivalence");
+ }
+ {
+  cosmos::Engine serial,parallel;serial.prepare(48000);parallel.prepare(48000);
+  cosmos::ParallelBench workers(parallel,4,137);
+  cosmos::Patch p;p.experimentalGrouped=true;p.experimentalTiled=true;p.experimentalInterpolation=2;
+  for(auto& layer:p.layer)for(auto& o:layer.osc){o.mode=cosmos::OscMode::wavetable;o.level=.2f;o.unison=16;o.detune=17;o.tableSource=1;}
+  for(int i=0;i<32;++i){serial.noteOn(0,48+i,.7f);parallel.noteOn(0,48+i,.7f);}
+  std::vector<float> l(137),r(137),ll(137),rr(137);
+  for(int b=0;b<48;++b){
+    int n=b%2?137:19;
+    for(auto* x:{&l,&r,&ll,&rr})std::fill(x->begin(),x->end(),0.f);
+    if(b==16){serial.pitch(0,9000);parallel.pitch(0,9000);}
+    if(b==24)for(int i=0;i<32;++i){serial.noteOff(0,48+i);parallel.noteOff(0,48+i);}
+    serial.render(l.data(),r.data(),n,p);workers.render(ll.data(),rr.data(),n,p);
+    for(int i=0;i<n;++i)check(std::abs(l[i]-ll[i])<1e-6f&&std::abs(r[i]-rr[i])<1e-6f,"parallel ordered mix equivalence");
+  }
  }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }

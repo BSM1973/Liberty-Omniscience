@@ -100,7 +100,10 @@ public:
       }
       return out;
     }
-    void render(float* left,float* right,int n,const Patch& patch) noexcept {
+    void render(float* left,float* right,int n,const Patch& patch) noexcept {renderRange(left,right,n,patch,0,voices);}
+    // Disjoint ranges may be processed concurrently with immutable patch and MIDI state.
+    // Caller must join all tasks before modifying MIDI state or reading telemetry.
+    void renderRange(float* left,float* right,int n,const Patch& patch,int first,int last) noexcept {
       if(n<=0)return;
       std::array<float,layers> alpha{},gl{},gr{};
       std::array<std::array<OscParams,oscillatorCount>,layers> prepared{};
@@ -116,7 +119,8 @@ public:
         double angle=(std::clamp(p.pan,-1.f,1.f)+1)*pi*.25;
         float g=p.enabled?p.gain:0.f;gl[k]=g*float(std::cos(angle));gr[k]=g*float(std::sin(angle));
       }
-      for(auto& a:v)if(a.active){
+      for(int voiceIndex=std::max(0,first);voiceIndex<std::min(voices,last);++voiceIndex){
+        auto& a=v[size_t(voiceIndex)];if(!a.active)continue;
         std::array<double,layers> dt{};
         for(int k=0;k<layers;++k)dt[k]=std::clamp(440.*std::exp2((a.note-69+patch.layer[k].tune+bend[a.channel])/12.)/sr,0.,.45);
         constexpr int tileSize=32;
