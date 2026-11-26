@@ -1,3 +1,3 @@
-# Liberty Omniscience — v0.3.4 COSMOS EXTREME OPTIMIZATION (candidat)
+# Liberty Omniscience — v0.3.5 COSMOS ULTRA PERFORMANCE (candidat)
 
-Cache de lecture Wavetable, unisson par tuiles de 32 échantillons expérimental, boucle granulaire optimisée, tests A/B et benchmarks natifs. Le chemin groupé/tuilé reste désactivé dans le plugin. Voir [roadmap](docs/ROADMAP.md).
+Interpolation Wavetable SIMD expérimentale NEON/SSE2/AVX2, table Hann granulaire optionnelle, tests A/B et benchmarks comparatifs. Les chemins expérimentaux restent désactivés dans le plugin. Voir [roadmap](docs/ROADMAP.md).

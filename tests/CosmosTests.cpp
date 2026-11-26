@@ -128,5 +128,44 @@ int main(){
     check(std::abs(cosmos::grainWrap(x,lo,lo+length)-reference)<1e-8,"fast granular wrap");
   }
  }
- std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped and tiled A/B tests passed\n";
+ {
+  // Compare both interpolation backends against the reference processor path.
+  for(int backend:{1,2}){
+    cosmos::Engine scalar,fast;scalar.prepare(48000);fast.prepare(48000);
+    cosmos::Patch a;
+    for(auto& layer:a.layer){layer.release=.03f;for(auto& o:layer.osc){o.mode=cosmos::OscMode::wavetable;o.tableSource=1;o.level=.2f;o.unison=16;o.detune=23;o.morph=.43f;}}
+    auto b=a;b.experimentalGrouped=true;b.experimentalTiled=true;b.experimentalInterpolation=backend;
+    for(int i=0;i<8;++i){scalar.noteOn(0,48+i,.7f);fast.noteOn(0,48+i,.7f);}
+    std::vector<float> l(137),r(137),ll(137),rr(137);double err=0,ref=0;float peak=0;
+    for(int block=0;block<64;++block){
+      int n=block%2?137:19;
+      for(auto* v:{&l,&r,&ll,&rr})std::fill(v->begin(),v->end(),0.f);
+      if(block==16){scalar.pitch(0,10000);fast.pitch(0,10000);}
+      if(block==24){a.layer[0].osc[0].morph=.77f;b.layer[0].osc[0].morph=.77f;}
+      if(block==32)for(int i=0;i<8;++i){scalar.noteOff(0,48+i);fast.noteOff(0,48+i);}
+      scalar.render(l.data(),r.data(),n,a);fast.render(ll.data(),rr.data(),n,b);
+      for(int i=0;i<n;++i)for(auto pair:{std::pair<float,float>{l[i],ll[i]},std::pair<float,float>{r[i],rr[i]}}){
+        double d=pair.first-pair.second;err+=d*d;ref+=double(pair.first)*pair.first;peak=std::max(peak,std::abs(pair.first-pair.second));
+      }
+    }
+    check(ref>0&&std::sqrt(err/ref)<1e-5&&peak<1e-4f,"SIMD interpolation equivalence");
+  }
+  for(int i=0;i<=65536;++i){
+    float x=float(i)/65536.f;
+    check(std::abs(cosmos::fastGrainWindow(0,x)-cosmos::grainWindow(0,x))<1e-6f,"Hann LUT error bound");
+  }
+  cosmos::Engine scalar,fast;scalar.prepare(48000);fast.prepare(48000);
+  cosmos::Patch a;
+  for(auto& layer:a.layer)for(auto& o:layer.osc){o.mode=cosmos::OscMode::granular;o.grain.source=1;o.grain.size=80;o.grain.density=30;o.level=.2f;}
+  auto b=a;b.experimentalGrainWindow=true;
+  for(int i=0;i<8;++i){scalar.noteOn(0,48+i,.7f);fast.noteOn(0,48+i,.7f);}
+  std::vector<float> l(128),r(128),ll(128),rr(128);double err=0,ref=0;
+  for(int block=0;block<128;++block){
+    for(auto* v:{&l,&r,&ll,&rr})std::fill(v->begin(),v->end(),0.f);
+    scalar.render(l.data(),r.data(),128,a);fast.render(ll.data(),rr.data(),128,b);
+    for(int i=0;i<128;++i){double d=l[i]-ll[i];err+=d*d;ref+=double(l[i])*l[i];}
+  }
+  check(ref>0&&std::sqrt(err/ref)<1e-5,"granular LUT engine equivalence");
+ }
+ std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }

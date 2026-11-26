@@ -46,6 +46,7 @@ struct OscParams {
     GrainParams grain{};
     int tableSource=0;
     bool experimentalGrouped=false;
+    int experimentalInterpolation=0;
     const HDTable* userTable=nullptr;
 };
 inline double wrap(double x) noexcept {return x-std::floor(x);}
@@ -259,7 +260,21 @@ inline void renderTableTile(HybridVoice& v,const OscParams& o,double noteDelta,f
     for(int u=0;u<un;++u){
         auto read=v.cachedRead[u];double phase=v.phase[u],mod=v.mod[u];
         const double d=v.cachedDelta[u],m=v.cachedModDelta[u];
-        for(int i=0;i<count;++i){
+        if(o.experimentalInterpolation&&read.a){
+            // Gather source samples in phase order; SIMD the two interpolations and sum.
+            // Fixed 32-sample scratch, no allocation; preserve unison accumulation order.
+            for(int start=0;start<count;start+=32){
+                int n=std::min(32,count-start);
+                std::array<float,32> a{},aa{},b{},bb{},t{};
+                for(int i=0;i<n;++i){
+                    double p=phase*tableSize;int idx=std::min(int(p),tableSize-1);t[i]=float(p-idx);
+                    a[i]=read.a[idx];aa[i]=read.a[idx+1];b[i]=read.b[idx];bb[i]=read.b[idx+1];
+                    phase+=d;if(phase>=1.)phase-=1.;
+                    mod+=m;if(mod>=1.)mod-=1.;
+                }
+                interpolateAdd(out+start,a.data(),aa.data(),b.data(),bb.data(),t.data(),read.morph,n,o.experimentalInterpolation);
+            }
+        }else for(int i=0;i<count;++i){
             out[i]+=read.read(phase);
             phase+=d;if(phase>=1.)phase-=1.;
             mod+=m;if(mod>=1.)mod-=1.;

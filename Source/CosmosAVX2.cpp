@@ -11,4 +11,16 @@ void advancePhasesAVX2(double* phase,const double* delta,int n) noexcept {
  for(;i<n;++i){phase[i]+=delta[i];if(phase[i]>=1.)phase[i]-=1.;}
  _mm256_zeroupper();
 }
+void interpolateAVX2(float* out,const float* a,const float* aa,const float* b,const float* bb,const float* t,float morph,int n)noexcept{
+ auto m=_mm256_set1_ps(morph);int i=0;
+ for(;i+7<n;i+=8){
+   auto p=_mm256_loadu_ps(t+i),x=_mm256_loadu_ps(a+i),y=_mm256_loadu_ps(b+i);
+   x=_mm256_add_ps(x,_mm256_mul_ps(_mm256_sub_ps(_mm256_loadu_ps(aa+i),x),p));
+   y=_mm256_add_ps(y,_mm256_mul_ps(_mm256_sub_ps(_mm256_loadu_ps(bb+i),y),p));
+   auto z=_mm256_add_ps(x,_mm256_mul_ps(_mm256_sub_ps(y,x),m));
+   _mm256_storeu_ps(out+i,_mm256_add_ps(_mm256_loadu_ps(out+i),z));
+ }
+ for(;i<n;++i){float x=a[i]+(aa[i]-a[i])*t[i],y=b[i]+(bb[i]-b[i])*t[i];out[i]+=x+(y-x)*morph;}
+ _mm256_zeroupper();
+}
 }
