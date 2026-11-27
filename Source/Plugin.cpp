@@ -244,7 +244,7 @@ public:
     }
     return p;
   }
-  int consumeLearn(){int learned=learnResult.exchange(-1);if(learned>=0)if(auto* par=state.getParameter(mid(learned/128,"source"))){par->beginChangeGesture();par->setValueNotifyingHost(par->convertTo0to1(float(27+learned%128)));par->endChangeGesture();}return learned;}
+  int consumeLearn(){int learned=learnResult.exchange(-1);if(learned>=0)if(auto* par=state.getParameter(mid(learned/128,"source"))){par->beginChangeGesture();par->setValueNotifyingHost(par->convertTo0to1(float(27+learned%128)));par->endChangeGesture();if(auto* enabled=state.getParameter(mid(learned/128,"enabled"))){enabled->beginChangeGesture();enabled->setValueNotifyingHost(1.f);enabled->endChangeGesture();}}return learned;}
   void processBlock(juce::AudioBuffer<float>& b,juce::MidiBuffer& midi)override{
     juce::ScopedNoDenormals nd;b.clear();if(b.getNumChannels()<2)return;
     auto p=patch();
@@ -528,7 +528,7 @@ class ModSlider final:public juce::Slider,public juce::DragAndDropTarget{
 public:
   int destination=0;bool individual=false;
   std::function<void(int)> assign;
-  bool isInterestedInDragSource(const SourceDetails& d)override{return destination>0&&d.description.toString().startsWith("cosmos-source:");}
+  bool isInterestedInDragSource(const SourceDetails& d)override{auto s=d.description.toString();int source=s.fromFirstOccurrenceOf(":",false,false).getIntValue();return destination>0&&s.startsWith("cosmos-source:")&&source>0&&source<cosmos::matrixSourceCount;}
   void itemDropped(const SourceDetails& d)override{if(isInterestedInDragSource(d)&&assign)assign(d.description.toString().fromFirstOccurrenceOf(":",false,false).getIntValue());}
   void mouseDown(const juce::MouseEvent& e)override{if(destination>0&&e.mods.isPopupMenu()){if(assign)assign(-1);return;}juce::Slider::mouseDown(e);}
   void mouseUp(const juce::MouseEvent& e)override{if(!(destination>0&&e.mods.isPopupMenu()))juce::Slider::mouseUp(e);}
@@ -570,7 +570,7 @@ class Editor final:public juce::AudioProcessorEditor,public juce::DragAndDropCon
   juce::ComboBox dragSource;ModDrag dragChip;juce::Label dragStatus;CustomRouteCurve customCurve;juce::TextButton curveButton{"COURBE"};bool curvePage=false;
   bool matrixPage=false,macroPage=false;int matrixBank=0,detailRow=0;juce::TextButton macroButton{"MACROS"};juce::Label detailLabel,detailLive;juce::ComboBox detailOsc,detailCurve;juce::Slider detailSmooth;std::unique_ptr<CA> detailOscAtt,detailCurveAtt;std::unique_ptr<SA> detailSmoothAtt;
   std::array<juce::Slider,8> macroKnobs;std::array<juce::Label,8> macroLabels;std::array<std::unique_ptr<SA>,8> macroAtt;
-  void routeTo(int source,int dest,bool individual){if(dest<=0)return;int free=-1;auto patch=p.patch();for(int i=0;i<64;++i)if(!patch.matrix[i].enabled&&patch.matrix[i].source==0){free=i;break;}if(free<0){dragStatus.setText("Matrice pleine",juce::dontSendNotification);return;}auto set=[&](const char* key,float v){if(auto* par=p.state.getParameter(mid(free,key))){par->beginChangeGesture();par->setValueNotifyingHost(par->convertTo0to1(v));par->endChangeGesture();}};set("destination",float(dest));set("layer",float(selected+1));set("oscillator",individual?float(selectedOsc+1):0.f);set("amount",.25f);set("polarity",source>0&&source<=8?1.f:0.f);if(source>0){set("source",float(source));set("enabled",1);dragStatus.setText("Route "+juce::String(free+1),juce::dontSendNotification);}else{set("enabled",1);p.learnResult.store(-1);p.learnRow.store(free);dragStatus.setText("MIDI Learn…",juce::dontSendNotification);}}
+  void routeTo(int source,int dest,bool individual){if(dest<=0||dest>cosmos::matrixDestCount||source==0||source>=cosmos::matrixSourceCount)return;if(p.learnRow.load()>=0||p.learnResult.load()>=0){dragStatus.setText("MIDI Learn en cours",juce::dontSendNotification);return;}int free=-1;auto patch=p.patch();for(int i=0;i<64;++i)if(!patch.matrix[i].enabled&&patch.matrix[i].source==0){free=i;break;}if(free<0){dragStatus.setText("Matrice pleine",juce::dontSendNotification);return;}auto set=[&](const char* key,float v){if(auto* par=p.state.getParameter(mid(free,key))){par->beginChangeGesture();par->setValueNotifyingHost(par->convertTo0to1(v));par->endChangeGesture();}};set("curve",0);set("smoothing",0);set("destination",float(dest));set("layer",float(selected+1));set("oscillator",individual?float(selectedOsc+1):0.f);set("amount",.25f);set("polarity",source>0&&source<=8?1.f:0.f);if(source>0){set("source",float(source));set("enabled",1);dragStatus.setText("Route "+juce::String(free+1),juce::dontSendNotification);}else{set("enabled",0);p.learnResult.store(-1);p.learnRow.store(free);dragStatus.setText("MIDI Learn…",juce::dontSendNotification);}}
   void setupTarget(ModSlider& s,int d,bool individual=false){s.destination=d;s.individual=individual;if(d>0){s.assign=[this,d,individual](int source){routeTo(source,d,individual);};s.setTooltip("Déposer une source / clic droit : MIDI Learn CC");}}
   void updateHalo(ModSlider& s,const cosmos::Patch& patch){if(!s.isVisible()||s.destination==0)return;float sum=0;bool assigned=false;for(int i=0;i<64;++i){const auto& m=patch.matrix[i];if(cosmos::validRoute(m)&&m.destination==s.destination&&(m.layer==0||m.layer==selected+1)&&(!s.individual||m.oscillator==0||m.oscillator==selectedOsc+1)&& (s.individual||m.oscillator==0)){assigned=true;sum+=p.matrixView[i].load(std::memory_order_relaxed);}}float q=std::clamp(sum,-1.f,1.f);auto& props=s.getProperties();if(bool(props.getWithDefault("modAssigned",false))!=assigned||std::abs(float(props.getWithDefault("modValue",0.f))-q)>.005f){props.set("modAssigned",assigned);props.set("modValue",q);s.repaint();}}
   void bindDetail(int row){detailRow=row;int i=matrixBank*8+row;detailOscAtt.reset();detailCurveAtt.reset();detailSmoothAtt.reset();detailOscAtt=std::make_unique<CA>(p.state,mid(i,"oscillator"),detailOsc);detailCurveAtt=std::make_unique<CA>(p.state,mid(i,"curve"),detailCurve);detailSmoothAtt=std::make_unique<SA>(p.state,mid(i,"smoothing"),detailSmooth);detailLabel.setText("Route "+juce::String(i+1),juce::dontSendNotification);for(int j=0;j<8;++j)matrixNumbers[j].setToggleState(j==row,juce::dontSendNotification);}juce::TextButton matrixButton{"MATRICE"};std::array<juce::TextButton,8> matrixBanks;
@@ -579,7 +579,7 @@ class Editor final:public juce::AudioProcessorEditor,public juce::DragAndDropCon
   void bindMatrix(int bank){matrixBank=bank;for(int row=0;row<8;++row){int i=bank*8+row;matrixEnabledAtt[row].reset();matrixAmountAtt[row].reset();for(auto& a:matrixChoiceAtt[row])a.reset();matrixEnabledAtt[row]=std::make_unique<BA>(p.state,mid(i,"enabled"),matrixEnabled[row]);for(int j=0;j<4;++j)matrixChoiceAtt[row][j]=std::make_unique<CA>(p.state,mid(i,matrixKeys[j+1]),matrixBoxes[row][j]);matrixAmountAtt[row]=std::make_unique<SA>(p.state,mid(i,"amount"),matrixAmounts[row]);matrixNumbers[row].setButtonText(juce::String(i+1));matrixBanks[row].setToggleState(row==bank,juce::dontSendNotification);}bindDetail(detailRow);}
   bool envPage=false;int selectedEnv=0;juce::TextButton envButton{"ENVELOPPES"};std::array<juce::TextButton,12> envTabs;
   ModEnvelopeView envView;FreeEnvelopeEditor freeView;juce::ToggleButton freeToggle{"Points libres"};std::unique_ptr<BA> freeToggleAtt;
-  void layoutFree(bool free){envView.setVisible(!free);freeView.setVisible(free);freeToggle.setVisible(true);// Dedicated vertical clearance above the classic structure selector (y=417).
+  void layoutFree(bool free){envView.setVisible(!free);freeView.setVisible(free);freeToggle.setVisible(true);// Preserve validated v0.5.6 geometry clearance.
     freeToggle.setBounds(free?310:460,free?465:396,130,19);envBoxLabels[0].setBounds(310,398,145,18);for(int j=0;j<6;++j){int x=310+285*(j%3),y=(free?492:398)+50*(j/3);envBoxes[j].setVisible(!free||(j!=0&&j!=2));envBoxLabels[j].setVisible(!free||(j!=0&&j!=2));if(j!=0||free)envBoxLabels[j].setBounds(x,y,270,18);envBoxes[j].setBounds(x,y+19,270,27);}for(int j=0;j<9;++j){bool show=!free||j==4||j==5||j==7||j==8;envKnobs[j].setVisible(show);envLabels[j].setVisible(show);int slot=j==4?0:j==5?1:j==7?2:3;int x=free?310+216*slot:310+172*(j%5),y=free?600:501+108*(j/5);envLabels[j].setBounds(x,y,free?200:162,19);envKnobs[j].setBounds(x+(free?44:25),y+20,112,83);}envLabels[5].setText(free?"Durée totale":"Durée segment",juce::dontSendNotification);}std::array<juce::ComboBox,6> envBoxes;std::array<juce::Label,6> envBoxLabels;std::array<juce::Slider,9> envKnobs;std::array<juce::Label,9> envLabels;std::array<std::unique_ptr<CA>,6> envChoiceAtt;std::array<std::unique_ptr<SA>,9> envSliderAtt;
   void bindEnvelope(int i){selectedEnv=i;freeToggleAtt.reset();freeToggleAtt=std::make_unique<BA>(p.state,eid(i,"freeEnabled"),freeToggle);for(auto& a:envChoiceAtt)a.reset();for(auto& a:envSliderAtt)a.reset();for(int j=0;j<6;++j)envChoiceAtt[j]=std::make_unique<CA>(p.state,eid(i,envKeys[j]),envBoxes[j]);for(int j=0;j<9;++j)envSliderAtt[j]=std::make_unique<SA>(p.state,eid(i,envKeys[j+6]),envKnobs[j]);for(int j=0;j<12;++j)envTabs[j].setToggleState(i==j,juce::dontSendNotification);}
   int selectedLfo=0;juce::TextButton lfoButton{"LFO"};std::array<juce::TextButton,8> lfoTabs;
@@ -684,8 +684,8 @@ class Editor final:public juce::AudioProcessorEditor,public juce::DragAndDropCon
     if(curvePage&&lfoPage&&matrixPage)customCurve.update(viewPatch.matrix[matrixBank*8+detailRow].points);
     if(macroPage&&lfoPage&&matrixPage)for(int j=0;j<8;++j)if(!macroLabels[j].isBeingEdited()){auto name=p.state.state.getProperty(juce::Identifier(macroId(j)+"Name"),"MACRO "+juce::String(j+1)).toString();macroLabels[j].setText(name,juce::dontSendNotification);}
     if(lfoPage&&!matrixPage){if(envPage){const auto& ep=viewPatch.modEnv[selectedEnv];layoutFree(ep.free.enabled);if(ep.free.enabled)freeView.update(ep.free);else envView.update(ep);}else{std::array<float,8> phases;for(int j=0;j<8;++j)phases[j]=p.lfoPhaseView[j].load(std::memory_order_relaxed);lfoOverview.update(viewPatch.lfo,selectedLfo,phases);}}
-    if(filterPage&&!filterModPage){auto layer=p.patch().layer[selected];filterResponse.update(layer.filter1,layer.filter2,p.getSampleRate()>0?p.getSampleRate():48000.);}
-    if(oscPage){if(!grainPage){const bool table=oscMode.getSelectedId()==2;tableBox.setVisible(table);tableImport.setVisible(table);}auto patch=p.patch();auto& l=patch.layer[selected];auto o=l.osc[selectedOsc];auto* s=l.sample;
+    if(filterPage&&!filterModPage){auto layer=viewPatch.layer[selected];filterResponse.update(layer.filter1,layer.filter2,p.getSampleRate()>0?p.getSampleRate():48000.);}
+    if(oscPage){if(!grainPage){const bool table=oscMode.getSelectedId()==2;tableBox.setVisible(table);tableImport.setVisible(table);}const auto& l=viewPatch.layer[selected];auto o=l.osc[selectedOsc];auto* s=l.sample;
       if(o.mode==cosmos::OscMode::granular&&o.grain.source)s=&cosmos::factoryGrains()[size_t(o.grain.source-1)];
       std::array<float,16> positions;for(size_t i=0;i<positions.size();++i)positions[i]=p.grainView[selected][selectedOsc][i].load(std::memory_order_relaxed);
       preview.update(o,s,positions);sampleLabel.setText(o.mode==cosmos::OscMode::wavetable?(o.tableSource==2?p.tableName(selected):o.tableSource==1?juce::String("Factory HD 256 × 2048"):juce::String("Historique 16 × 2048")):o.mode==cosmos::OscMode::granular&&o.grain.source?juce::String("Source d'usine"):p.sampleName(selected),juce::dontSendNotification);}
@@ -756,6 +756,21 @@ public:
     setResizable(true,true);setResizeLimits(900,570,1800,1140);if(auto* c=getConstrainer())c->setFixedAspectRatio(1200./760.);setSize(1200,760);
   }
   #ifdef COSMOS_PRESET_QA
+  bool qualifyModulationUI(const juce::File& folder){
+    p.setCurrentProgram(0);selectLayer(1);setLfoPage(false);
+    juce::DragAndDropTarget::SourceDetails drop(juce::var("cosmos-source:155"),&dragChip,{0,0});
+    juce::DragAndDropTarget::SourceDetails invalid(juce::var("cosmos-source:999"),&dragChip,{0,0});
+    bool ok=knobs[0].isInterestedInDragSource(drop)&&!knobs[0].isInterestedInDragSource(invalid)&&!knobs[4].isInterestedInDragSource(drop);
+    knobs[0].itemDropped(drop);auto patch=p.patch();ok&=patch.matrix[0].enabled&&patch.matrix[0].source==155&&patch.matrix[0].destination==3&&patch.matrix[0].layer==2;
+    // Use real processor telemetry, not fabricated UI state.
+    if(auto* m=p.state.getParameter(macroId(0)))m->setValueNotifyingHost(.8f);
+    p.prepareToPlay(48000,128);juce::AudioBuffer<float> b(2,128);juce::MidiBuffer midi;midi.addEvent(juce::MidiMessage::noteOn(1,60,.8f),0);p.processBlock(b,midi);
+    timerCallback();ok&=bool(knobs[0].getProperties().getWithDefault("modAssigned",false))&&std::abs(float(knobs[0].getProperties().getWithDefault("modValue",0.f))-.2f)<1e-5f;
+    auto file=folder.getChildFile("modulation-halo.png");juce::FileOutputStream out(file);juce::PNGImageFormat png;ok&=out.openedOk()&&png.writeImageToStream(createComponentSnapshot(getLocalBounds()),out);
+    knobs[0].itemDropped(drop);patch=p.patch();ok&=patch.matrix[0].enabled&&patch.matrix[1].enabled&&patch.matrix[1].source==155;
+    selectLayer(2);setOscPage(true);bindOsc(3);oscKnobs[5].itemDropped(drop);patch=p.patch();ok&=patch.matrix[2].layer==3&&patch.matrix[2].oscillator==4&&patch.matrix[2].destination==6;
+    p.setCurrentProgram(0);selectLayer(0);setLfoPage(false);return ok;
+  }
   bool qualifyLayout(const juce::File& folder){
     bool ok=true;
     for(int width:{900,1200,1800})for(int page=0;page<11;++page){
@@ -784,7 +799,7 @@ public:
     g.setColour(cyan);g.setFont(17);g.drawText("BIBLIOTHÈQUE  /  270",25,162,242,28,juce::Justification::centred);
     g.setColour(juce::Colour(0xff35495e));if(!oscPage&&!filterPage&&!lfoPage)for(int j=0;j<8;++j)g.drawRoundedRectangle(310.f+216.f*(j%4),316.f+180.f*(j/4),204.f,168.f,6.f,1.f);
     if(oscPage)for(int j=0;j<10;++j)g.drawRoundedRectangle(310.f+172.f*(j%5),449.f+132.f*(j/5),164.f,126.f,6.f,1.f);
-    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.5.6  COSMOS MODULATION PERFORMANCE  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
+    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.5.7  MODULATION PROFESSIONAL QUALITY CONTROL  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
   }
   void resized()override{
     canvas.setTransform(juce::AffineTransform::scale(float(getWidth())/1200.f));canvas.setBounds(0,0,1200,760);
@@ -831,6 +846,6 @@ bool cosmosTestMidiLearn(juce::AudioProcessor& p){auto& x=static_cast<Processor&
 void cosmosSetReferenceDSP(juce::AudioProcessor& p,bool ref){static_cast<Processor&>(p).referenceDSPForQA=ref;}
 bool cosmosTestImport(juce::AudioProcessor& p,const juce::File& f,bool table){auto& x=static_cast<Processor&>(p);return (table?x.loadTable(0,f):x.loadSample(0,f)).isEmpty();}
 bool cosmosTestAssets(juce::AudioProcessor& p,bool expected){auto& x=static_cast<Processor&>(p);return (x.samples[0].load()!=nullptr)==expected&&(x.tables[0].load()!=nullptr)==expected;}
-bool cosmosTestLayout(juce::AudioProcessor& p,const juce::File& dir){std::unique_ptr<juce::AudioProcessorEditor> editor(p.createEditor());return static_cast<Editor&>(*editor).qualifyLayout(dir);}
+bool cosmosTestLayout(juce::AudioProcessor& p,const juce::File& dir){std::unique_ptr<juce::AudioProcessorEditor> editor(p.createEditor());auto& e=static_cast<Editor&>(*editor);bool ui=e.qualifyModulationUI(dir);juce::Logger::writeToLog(ui?"Modulation drop target and halo: passed":"Modulation drop target and halo: FAILED");return e.qualifyLayout(dir)&&ui;}
 bool cosmosTestCache(juce::AudioProcessor& p){auto& x=static_cast<Processor&>(p);return x.retainedSamples.size()==1&&x.retainedTables.size()==1;}
 #endif

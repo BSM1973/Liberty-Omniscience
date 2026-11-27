@@ -399,5 +399,26 @@ int main(){
   for(int j=0;j<32;++j){a->noteOn(0,40+j,.7f);b->noteOn(0,40+j,.7f);}
   for(int block=0;block<120;++block){std::array<float,128> l{},r{},ll{},rr{};a->render(l.data(),r.data(),128,ref);b->render(ll.data(),rr.data(),128,fast);for(int j=0;j<128;++j)check(l[j]==ll[j]&&r[j]==rr[j]&&std::isfinite(l[j]),"64 route layer range exact AB");}
  }
+ {
+  // Individual sources and every route slot, verified via actual voice telemetry.
+  auto e=std::make_unique<cosmos::Engine>();e->prepare(48000);cosmos::Patch p;
+  for(int j=0;j<8;++j){p.lfo[j].shape=0;p.lfo[j].rate=float(j+1);p.lfo[j].phase=.25f;}
+  for(int j=0;j<12;++j){auto& ep=p.modEnv[j];ep.free.enabled=true;ep.free.count=16;ep.segmentTime=.001f;for(int k=0;k<16;++k){ep.free.x[k]=k/15.f;ep.free.y[k]=k/15.f;ep.free.curve[k]=k%3;}}
+  for(int j=0;j<8;++j)p.macros[j]=(j+1)/8.f;
+  for(int j=0;j<64;++j){int source=j<20?j+1:j<28?155+j-20:21;p.matrix[j]={true,source,3,1,0,.01f};}
+  e->noteOn(0,60,.8f);std::array<float,128> l{},r{};e->render(l.data(),r.data(),128,p);
+  auto values=e->matrixValues();auto phases=e->lfoPhases();
+  for(int j=0;j<8;++j){check(std::abs(phases[j]-127.f*(j+1)/48000)<1e-5f,"individual LFO phase");check(values[j]>.009f,"individual LFO route");check(std::abs(values[20+j]-.01f*p.macros[j])<1e-6f,"individual macro route");}
+  for(int j=0;j<12;++j){check(std::abs(values[8+j]-.01f)<1e-6f,"individual free envelope route");auto ep=p.modEnv[j];cosmos::ModEnvPlan plan(ep,48000,120);for(int k=0;k<16;++k)check(std::abs(cosmos::freeEnvelopeValue(plan,k/15.f)-k/15.f)<1e-5f,"all 192 free envelope points");}
+  for(int j=28;j<64;++j)check(std::abs(values[j]-.008f)<1e-6f,"individual route slot");
+  // MIDI per-channel pressure, poly pressure, pitch and CC; no channel leakage.
+  e->prepare(48000);p=cosmos::Patch{};for(int j=0;j<4;++j)p.matrix[j]={true,24+j,3,1,0,.1f};
+  e->noteOn(0,60,.8f);e->pressure(1,127);e->polyAftertouch(1,60,127);e->controller(1,0,127);e->render(l.data(),r.data(),128,p);values=e->matrixValues();check(values[0]==0&&values[1]==0&&values[3]==0,"MIDI channel isolation");
+  e->pressure(0,127);e->polyAftertouch(0,60,64);e->pitch(0,12288);e->controller(0,0,100);e->render(l.data(),r.data(),128,p);values=e->matrixValues();check(std::abs(values[0]-.1f)<1e-6f&&std::abs(values[1]-.1f*64/127)<1e-6f&&std::abs(values[2]-.075f)<1e-6f&&std::abs(values[3]-.1f*100/127)<1e-6f,"MIDI source values");
+  // Host PPQ supplied to engine: seek, tempo change, loop wrap and fallback.
+  e->prepare(48000);p=cosmos::Patch{};p.lfo[0].mode=2;p.lfo[0].division=3;p.matrix[0]={true,1,3,1,0,.1f};p.transportValid=true;e->noteOn(0,60,.8f);
+  for(double bpm:{60.,120.,180.})for(double ppq:{7.25,.125,-.5}){p.bpm=bpm;p.ppq=ppq;e->render(l.data(),r.data(),128,p);double end=ppq+127*bpm/(60*48000);check(std::abs(e->lfoPhases()[0]-(end-std::floor(end)))<1e-5,"transport phase seek and tempo");}
+  p.transportValid=false;e->render(l.data(),r.data(),128,p);check(e->lfoPhases()[0]>=0&&e->lfoPhases()[0]<1,"transport fallback");
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }
