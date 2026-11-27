@@ -1,5 +1,6 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "CosmosEngine.h"
+#include "CosmosMotion.h"
 #include <memory>
 #include <vector>
 #include <atomic>
@@ -49,6 +50,8 @@ const std::array<const char*,14> nexusKeys={"nexusEnabled","nexusX","nexusY","ne
 const juce::StringArray nexusMacroChoices={"Manuel / MIDI","Macro 1","Macro 2","Macro 3","Macro 4","Macro 5","Macro 6","Macro 7","Macro 8"};
 const std::array<const char*,10> morphKeys={"morphEnabled","morphAmount","morphCurve","morphLayer","morphOsc","morphGrain","morphFilter","morphEnv","morphProtectTune","morphProtectGain"};
 const juce::StringArray morphCurves={"Linéaire","Quadratique","Racine"};
+const std::array<const char*,8> motionKeys={"motionPlay","motionSync","motionBars","motionMode","motionSpeed","motionIntensity","motionRotate","motionFreeSeconds"};
+const juce::StringArray motionModes={"One Shot","Loop","Reverse","Ping-Pong"},motionBars={"1","2","4","8","16","32"};
 State::ParameterLayout layout(){
   State::ParameterLayout p;
   p.add(std::make_unique<F>(ID{"master",1},"Volume général",0.f,1.f,.7f));
@@ -112,12 +115,40 @@ State::ParameterLayout layout(){
   for(int j:{10,11})p.add(std::make_unique<C>(ID{nexusKeys[j],1},nexusKeys[j],nexusMacroChoices,0));
   for(int j:{12,13})p.add(std::make_unique<F>(ID{nexusKeys[j],1},nexusKeys[j],juce::NormalisableRange<float>(-1,127,1),-1));
   p.add(std::make_unique<B>(ID{morphKeys[0],1},morphKeys[0],false));p.add(std::make_unique<F>(ID{morphKeys[1],1},morphKeys[1],0.f,1.f,1.f));p.add(std::make_unique<C>(ID{morphKeys[2],1},morphKeys[2],morphCurves,0));for(int j=3;j<10;++j)p.add(std::make_unique<B>(ID{morphKeys[j],1},morphKeys[j],true));
+  p.add(std::make_unique<B>(ID{motionKeys[0],1},"Motion lecture",false));p.add(std::make_unique<B>(ID{motionKeys[1],1},"Motion synchro",true));p.add(std::make_unique<C>(ID{motionKeys[2],1},"Motion mesures",motionBars,2));p.add(std::make_unique<C>(ID{motionKeys[3],1},"Motion mode",motionModes,1));p.add(std::make_unique<F>(ID{motionKeys[4],1},"Motion vitesse",.25f,4.f,1.f));p.add(std::make_unique<F>(ID{motionKeys[5],1},"Motion intensité",0.f,1.f,1.f));p.add(std::make_unique<F>(ID{motionKeys[6],1},"Motion rotation",-180.f,180.f,0.f));p.add(std::make_unique<F>(ID{motionKeys[7],1},"Motion secondes",1.f,120.f,8.f));
   return p;
 }
 class Processor final:public juce::AudioProcessor {
 public:
   State state{*this,nullptr,"OMNISCIENCE",layout()};
   cosmos::Engine engine;
+  std::array<std::atomic<float>*,8> motionParams{};
+  // Atomic publication: UI/state readers never access the audio-owned recorder.
+  std::array<std::atomic<float>,cosmos::motionPoints> motionX{},motionY{};
+  std::atomic<int> motionCount{0},motionCommand{0},motionGeneration{0};std::atomic<double> motionDuration{4};std::atomic<bool> motionClipSync{true},motionRecording{false};std::atomic<float> motionPhaseView{0};
+  cosmos::MotionRecorder recorder;cosmos::MotionClip playbackClip;int seenMotion=-1;double motionElapsed=0,motionOrigin=0;bool motionWasPlaying=false,motionHadTransport=false;
+  void publishMotion(const cosmos::MotionClip& c){motionCount.store(0);for(int j=0;j<c.count;++j){motionX[j].store(c.x[j]);motionY[j].store(c.y[j]);}motionDuration.store(c.duration);motionClipSync.store(c.sync);motionCount.store(c.count);motionGeneration.fetch_add(1);}
+  cosmos::MotionClip readMotion()const{cosmos::MotionClip c;c.count=std::clamp(motionCount.load(),0,cosmos::motionPoints);c.duration=motionDuration.load();c.sync=motionClipSync.load();for(int j=0;j<c.count;++j){c.x[j]=motionX[j].load();c.y[j]=motionY[j].load();}return c;}
+  void resetMotion(){motionCommand.store(3);motionCount.store(0);motionGeneration.fetch_add(1);}
+  void processMotion(cosmos::Patch& p,int samples){
+    int cmd=motionCommand.exchange(0);double seconds=samples/std::max(8000.,getSampleRate()),beats=seconds*std::clamp(p.bpm,20.,400.)/60.;
+    if(cmd==3){motionRecording.store(false);motionWasPlaying=false;motionElapsed=0;recorder.clip.count=0;}
+    if(cmd==1){bool sync=motionParams[1]->load()>.5f;recorder.start(sync?4.*(1<<std::clamp(int(motionParams[2]->load()),0,5)):motionParams[7]->load(),sync);motionRecording.store(true);}
+    if(cmd==2&&motionRecording.exchange(false)){recorder.finish();publishMotion(recorder.clip);}
+    if(motionRecording.load()){bool done=recorder.capture(p.nexus.x,p.nexus.y,recorder.clip.sync?beats:seconds);motionPhaseView.store(float(std::clamp(recorder.elapsed/recorder.clip.duration,0.,1.)));if(done){motionRecording.store(false);publishMotion(recorder.clip);}return;}
+    int gen=motionGeneration.load();if(gen!=seenMotion){playbackClip=readMotion();seenMotion=gen;motionWasPlaying=false;}
+    bool play=motionParams[0]->load()>.5f&&playbackClip.count>1;
+    if(!play){motionWasPlaying=false;motionPhaseView.store(0);return;}
+    bool host=playbackClip.sync&&p.transportValid;
+    if(!motionWasPlaying){motionElapsed=0;motionOrigin=p.ppq;}
+    else if(host&&!motionHadTransport)motionOrigin=p.ppq-motionElapsed;
+    double elapsed=host?std::max(0.,p.ppq-motionOrigin):motionElapsed;
+    double phase=elapsed*motionParams[4]->load()/std::max(.01,playbackClip.duration);
+    int mode=int(motionParams[3]->load());auto xy=cosmos::motionTransform(playbackClip.at(phase,mode),motionParams[5]->load(),motionParams[6]->load(),false,false);
+    p.nexus.x=xy[0];p.nexus.y=xy[1];p.nexus.macroX=p.nexus.macroY=0;p.nexus.ccX=p.nexus.ccY=-1;
+    motionElapsed=elapsed+(playbackClip.sync?beats:seconds);motionWasPlaying=true;motionHadTransport=host;motionPhaseView.store(float(mode==0?std::clamp(phase,0.,1.):phase-std::floor(phase)));
+  }
+
   std::array<std::array<std::atomic<float>*,10>,4> params{};
   std::atomic<float>* master=nullptr;std::array<std::atomic<float>*,14> nexusParams{};std::array<std::atomic<float>*,10> morphParams{};std::array<std::atomic<float>,2> nexusView{};std::array<std::atomic<float>,4> nexusGainView{};
   std::array<std::array<std::atomic<float>*,9>,cosmos::lfoCount> lfoParams{};
@@ -220,6 +251,7 @@ public:
     for(int i=0;i<8;++i)macroParams[i]=state.getRawParameterValue(macroId(i));
     for(int j=0;j<14;++j)nexusParams[j]=state.getRawParameterValue(nexusKeys[j]);
     for(int j=0;j<10;++j)morphParams[j]=state.getRawParameterValue(morphKeys[j]);
+    for(int j=0;j<8;++j)motionParams[j]=state.getRawParameterValue(motionKeys[j]);
     setCurrentProgram(0);
   }
   const juce::String getName() const override{return "Omniscience";}
@@ -261,6 +293,7 @@ public:
     juce::ScopedNoDenormals nd;b.clear();if(b.getNumChannels()<2)return;
     auto p=patch();
     if(auto* ph=getPlayHead())if(auto position=ph->getPosition()){if(auto bpm=position->getBpm())p.bpm=*bpm;if(auto ppq=position->getPpqPosition()){p.ppq=*ppq;p.transportValid=position->getIsPlaying()&&std::isfinite(*ppq);}}
+    processMotion(p,b.getNumSamples());
     auto* l=b.getWritePointer(0);auto* r=b.getWritePointer(1);int pos=0,n=b.getNumSamples();
     for(const auto meta:midi){
       int at=juce::jlimit(pos,n,meta.samplePosition);engine.render(l+pos,r+pos,at-pos,p);if(p.transportValid)p.ppq+=(at-pos)*std::clamp(p.bpm,20.,400.)/(60*std::max(8000.,getSampleRate()));pos=at;
@@ -290,6 +323,7 @@ public:
   void changeProgramName(int,const juce::String&)override{}
   void setCurrentProgram(int i)override{
     if(i<0||i>=270)return;
+    resetMotion();for(auto key:motionKeys)if(auto* par=state.getParameter(key))par->setValueNotifyingHost(par->getDefaultValue());
     for(auto key:morphKeys)if(auto* par=state.getParameter(key))par->setValueNotifyingHost(par->getDefaultValue());
     for(auto key:nexusKeys)if(auto* par=state.getParameter(key))par->setValueNotifyingHost(par->getDefaultValue());
     resetOscillators();for(int j=0;j<8;++j)state.state.removeProperty(juce::Identifier(macroId(j)+"Name"),nullptr);
@@ -335,7 +369,7 @@ public:
     program.store(i);
   }
   void getStateInformation(juce::MemoryBlock& dest)override{
-    auto tree=state.copyState();tree.setProperty("program",program.load(),nullptr);tree.setProperty("schema",16,nullptr);
+    auto tree=state.copyState();tree.setProperty("program",program.load(),nullptr);tree.setProperty("schema",17,nullptr);auto motion=readMotion();juce::ValueTree mt("NEXUS_MOTION");mt.setProperty("duration",motion.duration,nullptr);mt.setProperty("sync",motion.sync,nullptr);for(int j=0;j<motion.count;++j){juce::ValueTree point("P");point.setProperty("x",motion.x[j],nullptr);point.setProperty("y",motion.y[j],nullptr);mt.addChild(point,-1,nullptr);}if(auto old=tree.getChildWithName("NEXUS_MOTION");old.isValid())tree.removeChild(old,nullptr);tree.addChild(mt,-1,nullptr);
     {std::lock_guard<std::mutex> lock(sampleMutex);for(int k=0;k<4;++k){tree.setProperty(juce::Identifier("sample"+juce::String(k)),samplePaths[k],nullptr);tree.setProperty(juce::Identifier("table"+juce::String(k)),tablePaths[k],nullptr);}}
     if(auto xml=tree.createXml())copyXmlToBinary(*xml,dest);
   }
@@ -347,7 +381,7 @@ public:
         for(auto key:grainKeys)reset(key);for(auto key:grainFlags)reset(key);reset("gWindow");reset("gSource");
       }
       if(int(t.getProperty("schema",1))<4)for(int k=0;k<4;++k)for(int o=0;o<5;++o)if(auto* par=state.getParameter(oid(k,o,"tableSource")))par->setValueNotifyingHost(0.f);
-      program.store(juce::jlimit(0,269,int(t.getProperty("program",0))));state.replaceState(t);if(int(t.getProperty("schema",1))<16)for(auto key:morphKeys)if(auto* par=state.getParameter(key))par->setValueNotifyingHost(par->getDefaultValue());if(int(t.getProperty("schema",1))<15)for(auto key:nexusKeys)if(auto* par=state.getParameter(key))par->setValueNotifyingHost(par->getDefaultValue());if(int(t.getProperty("schema",1))<14)for(int i=0;i<cosmos::modEnvCount;++i)for(int j=0;j<50;++j)if(auto* par=state.getParameter(eid(i,freeKey(j).toRawUTF8())))par->setValueNotifyingHost(par->getDefaultValue());if(int(t.getProperty("schema",1))<13)for(int i=0;i<cosmos::matrixCount;++i)for(int j=9;j<14;++j)if(auto* par=state.getParameter(mid(i,matrixKeys[j])))par->setValueNotifyingHost(par->getDefaultValue());learnRow.store(-1);learnResult.store(-1);
+      program.store(juce::jlimit(0,269,int(t.getProperty("program",0))));state.replaceState(t);resetMotion();cosmos::MotionClip restored;auto mt=t.getChildWithName("NEXUS_MOTION");if(mt.isValid()){restored.duration=std::clamp(double(mt.getProperty("duration",4)),.01,128.);restored.sync=bool(mt.getProperty("sync",true));restored.count=std::min(cosmos::motionPoints,mt.getNumChildren());for(int j=0;j<restored.count;++j){auto pt=mt.getChild(j);restored.x[j]=std::clamp(float(pt.getProperty("x",.5)),0.f,1.f);restored.y[j]=std::clamp(float(pt.getProperty("y",.5)),0.f,1.f);}}publishMotion(restored);if(int(t.getProperty("schema",1))<17)for(auto key:motionKeys)if(auto* par=state.getParameter(key))par->setValueNotifyingHost(par->getDefaultValue());if(int(t.getProperty("schema",1))<16)for(auto key:morphKeys)if(auto* par=state.getParameter(key))par->setValueNotifyingHost(par->getDefaultValue());if(int(t.getProperty("schema",1))<15)for(auto key:nexusKeys)if(auto* par=state.getParameter(key))par->setValueNotifyingHost(par->getDefaultValue());if(int(t.getProperty("schema",1))<14)for(int i=0;i<cosmos::modEnvCount;++i)for(int j=0;j<50;++j)if(auto* par=state.getParameter(eid(i,freeKey(j).toRawUTF8())))par->setValueNotifyingHost(par->getDefaultValue());if(int(t.getProperty("schema",1))<13)for(int i=0;i<cosmos::matrixCount;++i)for(int j=9;j<14;++j)if(auto* par=state.getParameter(mid(i,matrixKeys[j])))par->setValueNotifyingHost(par->getDefaultValue());learnRow.store(-1);learnResult.store(-1);
       if(int(t.getProperty("schema",1))<12){for(int j=0;j<cosmos::matrixCount;++j)for(auto key:{"oscillator","curve","smoothing"})if(auto* par=state.getParameter(mid(j,key)))par->setValueNotifyingHost(par->getDefaultValue());for(int j=0;j<8;++j)if(auto* par=state.getParameter(macroId(j)))par->setValueNotifyingHost(0.f);}
       if(int(t.getProperty("schema",1))<11)for(int j=0;j<cosmos::matrixCount;++j)for(auto key:matrixKeys)if(auto* par=state.getParameter(mid(j,key)))par->setValueNotifyingHost(par->getDefaultValue());
       if(int(t.getProperty("schema",1))<10)for(int j=0;j<cosmos::modEnvCount;++j)for(auto key:envKeys)if(auto* par=state.getParameter(eid(j,key)))par->setValueNotifyingHost(par->getDefaultValue());
@@ -581,6 +615,12 @@ public:
     g.setColour(light);g.setFont(11);g.drawText(active?"NEXUS ACTIF":"NEXUS INACTIF",0,4,getWidth(),18,juce::Justification::centred);
   }
 };
+class MotionGraph final:public juce::Component{
+ cosmos::MotionClip clip;float phase=0;bool rec=false;
+public:
+ void update(const cosmos::MotionClip& c,float p,bool r){clip=c;phase=p;rec=r;repaint();}
+ void paint(juce::Graphics& g)override{g.fillAll(juce::Colour(0xff0b1723));auto b=getLocalBounds().toFloat().reduced(10);g.setColour(juce::Colour(0xff344b60));for(int j=0;j<=8;++j)g.drawVerticalLine(int(b.getX()+b.getWidth()*j/8),b.getY(),b.getBottom());for(int j=0;j<=4;++j)g.drawHorizontalLine(int(b.getY()+b.getHeight()*j/4),b.getX(),b.getRight());for(int axis=0;axis<2;++axis){juce::Path path;for(int j=0;j<clip.count;++j){float x=b.getX()+b.getWidth()*j/std::max(1,clip.count-1),y=b.getBottom()-b.getHeight()*(axis?clip.y[j]:clip.x[j]);if(j==0)path.startNewSubPath(x,y);else path.lineTo(x,y);}g.setColour(juce::Colour(axis?0xff5de0bb:0xff51bddd));g.strokePath(path,juce::PathStrokeType(1.5f));}g.setColour(juce::Colours::white);g.drawVerticalLine(int(b.getX()+b.getWidth()*phase),b.getY(),b.getBottom());if(rec){g.setColour(juce::Colours::red);g.fillEllipse(12,12,9,9);}}
+};
 class Editor final:public juce::AudioProcessorEditor,public juce::DragAndDropContainer,private juce::ListBoxModel,private juce::Timer{
   Processor& p;Theme theme;juce::Component canvas;
   juce::TextEditor search;juce::ListBox browser;juce::Label patchLabel,layerTitle,masterLabel;
@@ -602,7 +642,8 @@ class Editor final:public juce::AudioProcessorEditor,public juce::DragAndDropCon
   bool grainPage=false,filterPage=false,filterModPage=false,lfoPage=false;
   void showNexus(bool show){setLfoPage(false);nexusPage=show;lfoPage=show;setOscPage(false);}
   bool morphPage=false;juce::TextButton morphButton{"MORPH ZONE"};std::array<juce::ToggleButton,8> morphToggles;std::array<std::unique_ptr<BA>,8> morphToggleAtt;juce::Slider morphAmount;juce::ComboBox morphCurve;juce::Label morphAmountLabel,morphCurveLabel,morphInfo;std::unique_ptr<SA> morphAmountAtt;std::unique_ptr<CA> morphCurveAtt;
-  void nexusVisibility(){nexusButton.setButtonText(nexusPage?"COUCHE":"NEXUS");nexusPad.setVisible(nexusPage);morphButton.setVisible(nexusPage);morphButton.setButtonText(morphPage?"CONTRÔLES XY":"MORPH ZONE");bool xy=nexusPage&&!morphPage,mv=nexusPage&&morphPage;for(auto& t:morphToggles)t.setVisible(mv);morphAmount.setVisible(mv);morphCurve.setVisible(mv);morphAmountLabel.setVisible(mv);morphCurveLabel.setVisible(mv);morphInfo.setVisible(mv);for(auto& t:nxToggles)t.setVisible(xy);for(auto& t:nxSliders)t.setVisible(xy);for(auto& t:nxSliderLabels)t.setVisible(xy);for(int j=0;j<2;++j){nxMacros[j].setVisible(xy);nxMacroLabels[j].setVisible(xy);nxCCLabels[j].setVisible(xy);nxLearn[j].setVisible(xy);nxClear[j].setVisible(xy);}}
+  bool motionPage=false;juce::TextButton motionButton{"MOTION"},motionRec{"REC"},motionStop{"STOP"},motionClear{"Effacer"};juce::ToggleButton motionPlay{"Lecture"},motionSync{"Synchro tempo"};MotionGraph motionGraph;juce::ComboBox motionLength,motionMode;std::array<juce::Slider,4> motionSliders;std::array<juce::Label,4> motionLabels;juce::Label motionStatus;std::unique_ptr<BA> motionPlayAtt,motionSyncAtt;std::unique_ptr<CA> motionLengthAtt,motionModeAtt;std::array<std::unique_ptr<SA>,4> motionSliderAtt;
+  void nexusVisibility(){nexusButton.setButtonText(nexusPage?"COUCHE":"NEXUS");nexusPad.setVisible(nexusPage);morphButton.setVisible(nexusPage);morphButton.setButtonText(morphPage?"CONTRÔLES XY":"MORPH ZONE");bool xy=nexusPage&&!morphPage&&!motionPage,mv=nexusPage&&morphPage&&!motionPage,mo=nexusPage&&motionPage;motionButton.setVisible(nexusPage);motionButton.setButtonText(motionPage?"CONTRÔLES XY":"MOTION");motionRec.setVisible(mo);motionStop.setVisible(mo);motionClear.setVisible(mo);motionPlay.setVisible(mo);motionSync.setVisible(mo);motionGraph.setVisible(mo);motionLength.setVisible(mo);motionMode.setVisible(mo);motionStatus.setVisible(mo);for(auto& s:motionSliders)s.setVisible(mo);for(auto& l:motionLabels)l.setVisible(mo);for(auto& t:morphToggles)t.setVisible(mv);morphAmount.setVisible(mv);morphCurve.setVisible(mv);morphAmountLabel.setVisible(mv);morphCurveLabel.setVisible(mv);morphInfo.setVisible(mv);for(auto& t:nxToggles)t.setVisible(xy);for(auto& t:nxSliders)t.setVisible(xy);for(auto& t:nxSliderLabels)t.setVisible(xy);for(int j=0;j<2;++j){nxMacros[j].setVisible(xy);nxMacroLabels[j].setVisible(xy);nxCCLabels[j].setVisible(xy);nxLearn[j].setVisible(xy);nxClear[j].setVisible(xy);}}
   juce::ComboBox dragSource;ModDrag dragChip;juce::Label dragStatus;CustomRouteCurve customCurve;juce::TextButton curveButton{"COURBE"};bool curvePage=false;
   bool matrixPage=false,macroPage=false;int matrixBank=0,detailRow=0;juce::TextButton macroButton{"MACROS"};juce::Label detailLabel,detailLive;juce::ComboBox detailOsc,detailCurve;juce::Slider detailSmooth;std::unique_ptr<CA> detailOscAtt,detailCurveAtt;std::unique_ptr<SA> detailSmoothAtt;
   std::array<juce::Slider,8> macroKnobs;std::array<juce::Label,8> macroLabels;std::array<std::unique_ptr<SA>,8> macroAtt;
@@ -621,7 +662,7 @@ class Editor final:public juce::AudioProcessorEditor,public juce::DragAndDropCon
   int selectedLfo=0;juce::TextButton lfoButton{"LFO"};std::array<juce::TextButton,8> lfoTabs;
   LfoOverview lfoOverview;std::array<juce::ComboBox,6> lfoBoxes;std::array<juce::Label,6> lfoBoxLabels;std::array<juce::Slider,3> lfoKnobs;std::array<juce::Label,3> lfoLabels;std::array<std::unique_ptr<CA>,6> lfoChoiceAtt;std::array<std::unique_ptr<SA>,3> lfoSliderAtt;
   void bindLfo(int i){selectedLfo=i;for(auto& a:lfoChoiceAtt)a.reset();for(auto& a:lfoSliderAtt)a.reset();for(int j=0;j<6;++j)lfoChoiceAtt[j]=std::make_unique<CA>(p.state,lid(i,lfoKeys[j<4?j:j+3]),lfoBoxes[j]);for(int j=0;j<3;++j)lfoSliderAtt[j]=std::make_unique<SA>(p.state,lid(i,lfoKeys[j+4]),lfoKnobs[j]);for(int j=0;j<8;++j)lfoTabs[j].setToggleState(i==j,juce::dontSendNotification);}
-  void setLfoPage(bool show){nexusPage=false;morphPage=false;curvePage=false;macroPage=false;matrixPage=false;envPage=false;lfoPage=show;filterPage=false;filterModPage=false;setOscPage(false);if(show)bindLfo(selectedLfo);}
+  void setLfoPage(bool show){nexusPage=false;morphPage=false;motionPage=false;curvePage=false;macroPage=false;matrixPage=false;envPage=false;lfoPage=show;filterPage=false;filterModPage=false;setOscPage(false);if(show)bindLfo(selectedLfo);}
   juce::TextButton filterModButton{"MODULATION"};
   std::array<juce::Slider,9> filterModKnobs;std::array<juce::Label,9> filterModText;std::array<std::unique_ptr<SA>,9> filterModAtt;
   juce::ToggleButton filterAuto{"Compensation auto"};std::unique_ptr<BA> filterAutoAtt;FilterResponse filterResponse;
@@ -719,6 +760,7 @@ class Editor final:public juce::AudioProcessorEditor,public juce::DragAndDropCon
     auto viewPatch=p.patch();for(auto& s:knobs)updateHalo(s,viewPatch);for(auto& s:filterKnobs)updateHalo(s,viewPatch);for(auto& s:oscKnobs)updateHalo(s,viewPatch);for(auto& s:grainKnobs)updateHalo(s,viewPatch);
     if(curvePage&&lfoPage&&matrixPage)customCurve.update(viewPatch.matrix[matrixBank*8+detailRow].points);
     if(macroPage&&lfoPage&&matrixPage)for(int j=0;j<8;++j)if(!macroLabels[j].isBeingEdited()){auto name=p.state.state.getProperty(juce::Identifier(macroId(j)+"Name"),"MACRO "+juce::String(j+1)).toString();macroLabels[j].setText(name,juce::dontSendNotification);}
+    if(nexusPage&&motionPage){auto clip=p.readMotion();motionGraph.update(clip,p.motionPhaseView.load(),p.motionRecording.load());motionStatus.setText(p.motionRecording.load()?juce::String("Enregistrement…"):juce::String(clip.count)+" points enregistrés",juce::dontSendNotification);}
     if(nexusPage){const auto& nx=viewPatch.nexus;std::array<float,4> w;for(int j=0;j<4;++j)w[j]=p.nexusGainView[j].load(std::memory_order_relaxed);nexusPad.update(p.nexusView[0].load(),p.nexusView[1].load(),w,nx.enabled);nxSliders[0].setEnabled(!nx.lockX);nxSliders[1].setEnabled(!nx.lockY);for(int j=0;j<2;++j){int cc=j?nx.ccY:nx.ccX;nxCCLabels[j].setText(p.learnRow.load()==64+j?juce::String("En écoute…"):cc>=0?juce::String("CC ")+juce::String(cc):juce::String("CC —"),juce::dontSendNotification);}}
     if(lfoPage&&!matrixPage&&!nexusPage){if(envPage){const auto& ep=viewPatch.modEnv[selectedEnv];layoutFree(ep.free.enabled);if(ep.free.enabled)freeView.update(ep.free);else envView.update(ep);}else{std::array<float,8> phases;for(int j=0;j<8;++j)phases[j]=p.lfoPhaseView[j].load(std::memory_order_relaxed);lfoOverview.update(viewPatch.lfo,selectedLfo,phases);}}
     if(filterPage&&!filterModPage){auto layer=viewPatch.layer[selected];filterResponse.update(layer.filter1,layer.filter2,p.getSampleRate()>0?p.getSampleRate():48000.);}
@@ -789,7 +831,8 @@ public:
     dragSource.addItemList(matrixSources,1);dragSource.setSelectedId(2,juce::dontSendNotification);add(dragSource);dragChip.setButtonText("GLISSER");dragChip.source=[this]{return dragSource.getSelectedId()-1;};dragChip.setTooltip("Glisser la source sur un potentiomètre compatible");add(dragChip);label(dragStatus,"",11);
     setupTarget(knobs[0],3);setupTarget(knobs[1],4);setupTarget(knobs[2],5);setupTarget(knobs[3],1);setupTarget(filterKnobs[0],1);setupTarget(filterKnobs[1],11);setupTarget(filterKnobs[3],2);setupTarget(filterKnobs[4],12);setupTarget(oscKnobs[1],5,true);setupTarget(oscKnobs[5],6,true);setupTarget(oscKnobs[6],10,true);setupTarget(oscKnobs[7],9,true);setupTarget(grainKnobs[1],8,true);setupTarget(grainKnobs[2],7,true);
     curveButton.onClick=[this]{curvePage=!curvePage;setOscPage(false);};add(curveButton);add(customCurve);customCurve.onEdit=[this](int j,float v,bool begin,bool end){int i=matrixBank*8+detailRow;if(auto* par=p.state.getParameter(mid(i,matrixKeys[9+j]))){if(begin)par->beginChangeGesture();par->setValueNotifyingHost(par->convertTo0to1(v));if(end)par->endChangeGesture();}};
-    morphButton.onClick=[this]{morphPage=!morphPage;nexusVisibility();};add(morphButton);const char* morphNames[]={"Activer morphing","Volume / panoramique","Oscillateurs","Granulaire","Filtres","Enveloppes","Protéger accordage","Protéger volume"};for(int j=0;j<8;++j){morphToggles[j].setButtonText(juce::String::fromUTF8(morphNames[j]));add(morphToggles[j]);morphToggleAtt[j]=std::make_unique<BA>(p.state,morphKeys[j==0?0:j+2],morphToggles[j]);}label(morphAmountLabel,"Intensité",13);morphAmount.setSliderStyle(juce::Slider::LinearHorizontal);morphAmount.setTextBoxStyle(juce::Slider::TextBoxRight,false,65,22);add(morphAmount);morphAmountAtt=std::make_unique<SA>(p.state,morphKeys[1],morphAmount);label(morphCurveLabel,"Courbe",13);morphCurve.addItemList(morphCurves,1);add(morphCurve);morphCurveAtt=std::make_unique<CA>(p.state,morphKeys[2],morphCurve);label(morphInfo,"Les couches originales restent intactes.",14);
+    motionButton.onClick=[this]{motionPage=!motionPage;morphPage=false;nexusVisibility();};add(motionButton);add(motionGraph);add(motionRec);add(motionStop);add(motionClear);add(motionPlay);add(motionSync);motionRec.onClick=[this]{p.motionCommand.store(1);};motionStop.onClick=[this]{p.motionCommand.store(2);if(auto* par=p.state.getParameter(motionKeys[0]))par->setValueNotifyingHost(0);};motionClear.onClick=[this]{p.resetMotion();};motionPlayAtt=std::make_unique<BA>(p.state,motionKeys[0],motionPlay);motionSyncAtt=std::make_unique<BA>(p.state,motionKeys[1],motionSync);motionLength.addItemList(motionBars,1);add(motionLength);motionLengthAtt=std::make_unique<CA>(p.state,motionKeys[2],motionLength);motionMode.addItemList(motionModes,1);add(motionMode);motionModeAtt=std::make_unique<CA>(p.state,motionKeys[3],motionMode);const char* ml[]={"Vitesse","Intensité","Rotation","Durée libre (s)"};for(int j=0;j<4;++j){label(motionLabels[j],juce::String::fromUTF8(ml[j]),13);motionSliders[j].setSliderStyle(juce::Slider::LinearHorizontal);motionSliders[j].setTextBoxStyle(juce::Slider::TextBoxRight,false,65,22);add(motionSliders[j]);motionSliderAtt[j]=std::make_unique<SA>(p.state,motionKeys[4+j],motionSliders[j]);}label(motionStatus,"Aucun mouvement",13);
+    morphButton.onClick=[this]{morphPage=!morphPage;motionPage=false;nexusVisibility();};add(morphButton);const char* morphNames[]={"Activer morphing","Volume / panoramique","Oscillateurs","Granulaire","Filtres","Enveloppes","Protéger accordage","Protéger volume"};for(int j=0;j<8;++j){morphToggles[j].setButtonText(juce::String::fromUTF8(morphNames[j]));add(morphToggles[j]);morphToggleAtt[j]=std::make_unique<BA>(p.state,morphKeys[j==0?0:j+2],morphToggles[j]);}label(morphAmountLabel,"Intensité",13);morphAmount.setSliderStyle(juce::Slider::LinearHorizontal);morphAmount.setTextBoxStyle(juce::Slider::TextBoxRight,false,65,22);add(morphAmount);morphAmountAtt=std::make_unique<SA>(p.state,morphKeys[1],morphAmount);label(morphCurveLabel,"Courbe",13);morphCurve.addItemList(morphCurves,1);add(morphCurve);morphCurveAtt=std::make_unique<CA>(p.state,morphKeys[2],morphCurve);label(morphInfo,"Les couches originales restent intactes.",14);
     nexusButton.onClick=[this]{showNexus(!nexusPage);};add(nexusButton);add(nexusPad);
     const char* nxNames[]={"Activer NEXUS","Puissance constante","Verrouiller X","Verrouiller Y","Retour au centre","Inverser X","Inverser Y"};const int nxIds[]={0,3,5,6,7,8,9};
     for(int j=0;j<7;++j){nxToggles[j].setButtonText(juce::String::fromUTF8(nxNames[j]));add(nxToggles[j]);nxToggleAtt[j]=std::make_unique<BA>(p.state,nexusKeys[nxIds[j]],nxToggles[j]);}
@@ -817,8 +860,8 @@ public:
   }
   bool qualifyLayout(const juce::File& folder){
     bool ok=true;
-    for(int width:{900,1200,1800})for(int page=0;page<13;++page){
-      setSize(width,int(width*760./1200.));grainPage=page==2;filterPage=false;lfoPage=false;matrixPage=false;nexusPage=false;setOscPage(page==1||page==2);if(page==3||page==4){filterModPage=page==4;setFilterPage(true);}if(page>=5){setLfoPage(true);if(page==6||page==10){envPage=true;setOscPage(false);bindEnvelope(0);if(auto* par=p.state.getParameter(eid(0,"freeEnabled")))par->setValueNotifyingHost(page==10?1.f:0.f);}if(page>=7&&page<=9){matrixPage=true;macroPage=page==8;curvePage=page==9;setOscPage(false);bindMatrix(7);}}if(page>=11){showNexus(true);morphPage=page==12;nexusVisibility();}timerCallback();
+    for(int width:{900,1200,1800})for(int page=0;page<14;++page){
+      setSize(width,int(width*760./1200.));grainPage=page==2;filterPage=false;lfoPage=false;matrixPage=false;nexusPage=false;setOscPage(page==1||page==2);if(page==3||page==4){filterModPage=page==4;setFilterPage(true);}if(page>=5){setLfoPage(true);if(page==6||page==10){envPage=true;setOscPage(false);bindEnvelope(0);if(auto* par=p.state.getParameter(eid(0,"freeEnabled")))par->setValueNotifyingHost(page==10?1.f:0.f);}if(page>=7&&page<=9){matrixPage=true;macroPage=page==8;curvePage=page==9;setOscPage(false);bindMatrix(7);}}if(page>=11){showNexus(true);morphPage=page==12;motionPage=page==13;nexusVisibility();}timerCallback();
       for(int i=0;i<canvas.getNumChildComponents();++i){auto* a=canvas.getChildComponent(i);if(!a->isVisible())continue;
         ok&=canvas.getLocalBounds().contains(a->getBounds());
         for(int j=i+1;j<canvas.getNumChildComponents();++j){auto* b=canvas.getChildComponent(j);if(b->isVisible()&&a->getBounds().intersects(b->getBounds())){ok=false;juce::Logger::writeToLog("Layout overlap: width="+juce::String(width)+" page="+juce::String(page)+" "+a->getName()+" ["+a->getBounds().toString()+"] / "+b->getName()+" ["+b->getBounds().toString()+"]");}}
@@ -843,7 +886,7 @@ public:
     g.setColour(cyan);g.setFont(17);g.drawText("BIBLIOTHÈQUE  /  270",25,162,242,28,juce::Justification::centred);
     g.setColour(juce::Colour(0xff35495e));if(!oscPage&&!filterPage&&!lfoPage)for(int j=0;j<8;++j)g.drawRoundedRectangle(310.f+216.f*(j%4),316.f+180.f*(j/4),204.f,168.f,6.f,1.f);
     if(oscPage)for(int j=0;j<10;++j)g.drawRoundedRectangle(310.f+172.f*(j%5),449.f+132.f*(j/5),164.f,126.f,6.f,1.f);
-    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.6.1  COSMOS ADVANCED MORPH ZONE  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
+    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.6.2  COSMOS MOTION RECORDING  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
   }
   void resized()override{
     canvas.setTransform(juce::AffineTransform::scale(float(getWidth())/1200.f));canvas.setBounds(0,0,1200,760);
@@ -851,6 +894,7 @@ public:
     masterLabel.setBounds(1040,8,140,20);master.setBounds(1045,30,130,102);
     for(int k=0;k<4;++k)tabs[k].setBounds(292+225*k,151,219,52);
     layerTitle.setBounds(312,227,280,32);lfoButton.setBounds(600,230,150,30);envButton.setBounds(760,230,175,30);matrixButton.setBounds(945,230,220,30);macroButton.setBounds(760,230,85,30);curveButton.setBounds(850,230,85,30);customCurve.setBounds(310,310,855,390);
+    motionButton.setBounds(760,230,175,30);motionGraph.setBounds(775,270,390,145);motionRec.setBounds(775,422,90,28);motionStop.setBounds(870,422,90,28);motionClear.setBounds(965,422,200,28);motionPlay.setBounds(775,454,190,26);motionSync.setBounds(970,454,195,26);motionLength.setBounds(775,486,190,28);motionMode.setBounds(970,486,195,28);for(int j=0;j<4;++j){motionLabels[j].setBounds(775,521+j*39,115,28);motionSliders[j].setBounds(895,521+j*39,270,28);}motionStatus.setBounds(775,680,390,30);
     morphButton.setBounds(945,230,220,30);for(int j=0;j<8;++j)morphToggles[j].setBounds(775,270+j*35,390,30);morphAmountLabel.setBounds(775,560,85,30);morphAmount.setBounds(865,560,300,30);morphCurveLabel.setBounds(775,605,85,30);morphCurve.setBounds(865,605,300,30);morphInfo.setBounds(775,660,390,30);
     nexusPad.setBounds(310,270,450,445);for(int j=0;j<7;++j)nxToggles[j].setBounds(775+195*(j%2),270+30*(j/2),190,26);for(int j=0;j<3;++j){int y=402+45*j;nxSliderLabels[j].setBounds(775,y,85,28);nxSliders[j].setBounds(865,y,300,28);}for(int j=0;j<2;++j){int y=545+j*78;nxMacroLabels[j].setBounds(775,y,85,28);nxMacros[j].setBounds(865,y,300,28);nxCCLabels[j].setBounds(775,y+32,110,28);nxLearn[j].setBounds(890,y+32,135,28);nxClear[j].setBounds(1030,y+32,135,28);}
     detailLabel.setBounds(310,699,90,25);detailOsc.setBounds(403,699,130,25);detailCurve.setBounds(537,699,150,25);detailSmooth.setBounds(692,699,295,25);detailLive.setBounds(992,699,173,25);

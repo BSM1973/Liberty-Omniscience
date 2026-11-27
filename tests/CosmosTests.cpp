@@ -1,4 +1,5 @@
 #include "CosmosEngine.h"
+#include "CosmosMotion.h"
 #include "CosmosParallelBench.h"
 #include <iostream>
 #include <vector>
@@ -433,6 +434,9 @@ int main(){
  auto z=p;cosmos::applyMorph(z,.5f,1);check(std::abs(z.layer[0].cutoff-1000)<.01f,"morph logarithmic cutoff");check(z.layer[0].tune==-12,"morph protected tuning");check(p.layer[0].cutoff==100,"morph original intact");
  z=p;z.morph.family[3]=false;cosmos::applyMorph(z,1,1);check(z.layer[0].cutoff==100,"morph filter family lock");z=p;z.morph.amount=0;cosmos::applyMorph(z,1,1);check(z.layer[0].cutoff==100,"morph zero amount");z=p;z.morph.protectTune=false;cosmos::applyMorph(z,1,1);check(z.layer[0].tune==12,"morph corner tuning");
  auto a=std::make_unique<cosmos::Engine>();a->prepare(48000);p.nexus.enabled=true;p.nexus.x=.5f;p.nexus.y=1;a->noteOn(0,60,.8f);std::array<float,128> l{},r{};a->render(l.data(),r.data(),128,p);for(auto v:l)check(std::isfinite(v),"morph render finite");
+ }
+ {
+ cosmos::MotionRecorder rec;rec.start(4,true);for(int j=0;j<=1024;++j)rec.capture(float(j)/1024,.25f,4./1024);check(rec.clip.count==1024,"motion capacity");auto a=rec.clip.at(.5,0);check(std::abs(a[0]-.5f)<.01f&&std::abs(a[1]-.25f)<1e-6f,"motion interpolation");auto b=rec.clip.at(1.25,1),c=rec.clip.at(.25,2),d=rec.clip.at(1.25,3);check(std::abs(b[0]-.25f)<.01f&&std::abs(c[0]-.75f)<.01f&&std::abs(d[0]-.75f)<.01f,"motion playback modes");auto f=cosmos::motionTransform({1,.5f},1,90,false,false);check(std::abs(f[0]-.5f)<1e-5f&&std::abs(f[1]-1)<1e-5f,"motion rotation");rec.start(8,false);rec.capture(.2f,.8f,.1);rec.finish();check(rec.clip.count>0&&rec.clip.duration>0,"motion early stop");
  }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }
