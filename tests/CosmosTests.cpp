@@ -320,5 +320,17 @@ int main(){
     for(int j=0;j<10000;++j){float x=j==0?.4f:0.f;check(used.tick(x,p)==fresh.tick(x,p),"comb reset no stale history");}
   }
  }
+ {
+  cosmos::LfoParams p;p.depth=1;p.rate=2;cosmos::LfoState s;int rises=0;float prev=0;
+  for(int i=0;i<48000;++i){float y=s.tick(p,cosmos::lfoHz(p,120)/48000);if(y>0&&prev<=0)++rises;prev=y;check(std::isfinite(y)&&std::abs(y)<=1,"LFO bounded");}
+  check(rises==2,"LFO frequency");p.division=3;check(cosmos::lfoHz(p,90)==1.5,"LFO tempo sync");
+  for(int shape=0;shape<6;++shape)for(int j=0;j<1000;++j){float y=cosmos::lfoWave(shape,j/1000.);check(std::isfinite(y)&&std::abs(y)<=1,"LFO shape range");}
+  cosmos::Engine dry,wet,split;dry.prepare(48000);wet.prepare(48000);split.prepare(48000);
+  cosmos::Patch a,b; b=a;b.lfo[0].destination=3;b.lfo[0].depth=.8f;b.lfo[0].rate=5;
+  for(auto* e:{&dry,&wet,&split})e->noteOn(0,60,.8f);
+  double diff=0;
+  for(int block=0;block<50;++block){std::array<float,128> l{},r{},ll{},rr{},sl{},sr{};dry.render(l.data(),r.data(),128,a);wet.render(ll.data(),rr.data(),128,b);split.render(sl.data(),sr.data(),19,b);split.render(sl.data()+19,sr.data()+19,109,b);for(int j=0;j<128;++j){diff+=std::abs(ll[j]-l[j]);check(std::abs(ll[j]-sl[j])<1e-6f&&std::abs(rr[j]-sr[j])<1e-6f,"amplitude LFO independent of render partition");}}
+  check(diff>.01,"LFO actual modulation");
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }

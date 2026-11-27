@@ -28,6 +28,12 @@ const std::array<const char*,9> grainNames={"Taille (ms)","Densité","Position",
 const std::array<const char*,3> grainFlags={"gFreeze","gReverse","gSync"};
 juce::String oid(int k,int o,const char* key){return id(k,(juce::String("osc")+juce::String(o+1)+"_"+key).toRawUTF8());}
 juce::String presetName(int i){if(i>=200)return "Filtres / "+filterNames[i-198];if(i>=100)return juce::String("Granular / ")+categories[size_t((i-100)/10)]+" "+adjectives[size_t(i%10)];return juce::String(categories[size_t(i/10)])+" / "+adjectives[size_t(i%10)];}
+const juce::StringArray lfoShapes={"Sinus","Triangle","Dent montante","Dent descendante","Carrée","Sample & Hold"};
+const juce::StringArray lfoDest={"Aucune","Fréquence filtre A","Fréquence filtre B","Amplitude","Panoramique"};
+const juce::StringArray lfoLayers={"Toutes","Couche A","Couche B","Couche C","Couche D"};
+const juce::StringArray lfoDivisions={"Libre (Hz)","1 mesure (4/4)","Blanche","Noire","Croche","Double croche","Triolet de croche","Croche pointée"};
+const std::array<const char*,7> lfoKeys={"shape","destination","layer","division","rate","depth","phase"};
+juce::String lid(int i,const char* k){return "lfo"+juce::String(i+1)+"_"+k;}
 State::ParameterLayout layout(){
   State::ParameterLayout p;
   p.add(std::make_unique<F>(ID{"master",1},"Volume général",0.f,1.f,.7f));
@@ -64,6 +70,13 @@ State::ParameterLayout layout(){
       p.add(std::make_unique<B>(ID{key("sync"),1},key("sync"),false));p.add(std::make_unique<B>(ID{key("ring"),1},key("ring"),false));
     }
   }
+  for(int i=0;i<cosmos::lfoCount;++i){
+    auto addChoice=[&](const char* key,const juce::StringArray& choices){p.add(std::make_unique<C>(ID{lid(i,key),1},lid(i,key),choices,0));};
+    addChoice("shape",lfoShapes);addChoice("destination",lfoDest);addChoice("layer",lfoLayers);addChoice("division",lfoDivisions);
+    p.add(std::make_unique<F>(ID{lid(i,"rate"),1},lid(i,"rate"),juce::NormalisableRange<float>(.01f,40.f,0.f,.3f),1.f));
+    p.add(std::make_unique<F>(ID{lid(i,"depth"),1},lid(i,"depth"),-1.f,1.f,0.f));
+    p.add(std::make_unique<F>(ID{lid(i,"phase"),1},lid(i,"phase"),0.f,1.f,0.f));
+  }
   return p;
 }
 class Processor final:public juce::AudioProcessor {
@@ -72,6 +85,7 @@ public:
   cosmos::Engine engine;
   std::array<std::array<std::atomic<float>*,10>,4> params{};
   std::atomic<float>* master=nullptr;
+  std::array<std::array<std::atomic<float>*,7>,cosmos::lfoCount> lfoParams{};
   std::array<std::array<std::atomic<float>*,11>,4> filterParams{};
   std::array<std::array<std::atomic<float>*,9>,4> filterModParams{};
   std::atomic<int> program{-1};
@@ -161,6 +175,7 @@ public:
     for(int k=0;k<4;++k){params[k][0]=state.getRawParameterValue(id(k,"enabled"));params[k][1]=state.getRawParameterValue(id(k,"wave"));for(int j=0;j<8;++j)params[k][j+2]=state.getRawParameterValue(id(k,keys[j]));}
     for(int k=0;k<4;++k){const char* fk[]={"fModel","f2Model","fRoute","fRes","fDrive","f2Cutoff","f2Res","f2Drive","fMix","fTrim","fAuto"};for(int j=0;j<11;++j)filterParams[k][j]=state.getRawParameterValue(id(k,fk[j]));}
     for(int k=0;k<4;++k)for(int j=0;j<9;++j)filterModParams[k][j]=state.getRawParameterValue(id(k,filterModKeys[j]));
+    for(int i=0;i<cosmos::lfoCount;++i)for(int j=0;j<7;++j)lfoParams[i][j]=state.getRawParameterValue(lid(i,lfoKeys[j]));
     setCurrentProgram(0);
   }
   const juce::String getName() const override{return "Omniscience";}
@@ -172,6 +187,7 @@ public:
   bool referenceDSPForQA=false;
   cosmos::Patch patch() const {
     cosmos::Patch p;p.master=master->load();
+    for(int i=0;i<cosmos::lfoCount;++i){const auto& x=lfoParams[i];p.lfo[i]={int(x[0]->load()),int(x[1]->load()),int(x[2]->load()),int(x[3]->load()),x[4]->load(),x[5]->load(),x[6]->load()};}
     p.experimentalGrouped=true;p.experimentalTiled=true;p.experimentalInterpolation=1;
 #if defined(_M_X64)
     p.experimentalInterpolation=2;
@@ -225,6 +241,7 @@ public:
   void setCurrentProgram(int i)override{
     if(i<0||i>=270)return;
     resetOscillators();
+    for(int j=0;j<cosmos::lfoCount;++j)for(auto key:lfoKeys)if(auto* par=state.getParameter(lid(j,key)))par->setValueNotifyingHost(par->getDefaultValue());
     auto set=[&](const juce::String& key,float v){if(auto* p=state.getParameter(key))p->setValueNotifyingHost(p->convertTo0to1(v));};
     int cat=(i%100)/10,var=i%10;
     const float attacks[]={.015f,.75f,.006f,.008f,.004f,.5f,.025f,.9f,.003f,.12f};
@@ -262,7 +279,7 @@ public:
     program.store(i);
   }
   void getStateInformation(juce::MemoryBlock& dest)override{
-    auto tree=state.copyState();tree.setProperty("program",program.load(),nullptr);tree.setProperty("schema",7,nullptr);
+    auto tree=state.copyState();tree.setProperty("program",program.load(),nullptr);tree.setProperty("schema",8,nullptr);
     {std::lock_guard<std::mutex> lock(sampleMutex);for(int k=0;k<4;++k){tree.setProperty(juce::Identifier("sample"+juce::String(k)),samplePaths[k],nullptr);tree.setProperty(juce::Identifier("table"+juce::String(k)),tablePaths[k],nullptr);}}
     if(auto xml=tree.createXml())copyXmlToBinary(*xml,dest);
   }
@@ -275,6 +292,7 @@ public:
       }
       if(int(t.getProperty("schema",1))<4)for(int k=0;k<4;++k)for(int o=0;o<5;++o)if(auto* par=state.getParameter(oid(k,o,"tableSource")))par->setValueNotifyingHost(0.f);
       program.store(juce::jlimit(0,269,int(t.getProperty("program",0))));state.replaceState(t);
+      if(int(t.getProperty("schema",1))<8)for(int j=0;j<cosmos::lfoCount;++j)for(auto key:lfoKeys)if(auto* par=state.getParameter(lid(j,key)))par->setValueNotifyingHost(par->getDefaultValue());
       if(int(t.getProperty("schema",1))<7)for(int k=0;k<4;++k)for(auto key:filterModKeys)if(auto* par=state.getParameter(id(k,key)))par->setValueNotifyingHost(par->getDefaultValue());
       if(int(t.getProperty("schema",1))<6)for(int k=0;k<4;++k)if(auto* par=state.getParameter(id(k,"fAuto")))par->setValueNotifyingHost(0.f);
       if(int(t.getProperty("schema",1))<5)for(int k=0;k<4;++k){const char* fk[]={"fModel","f2Model","fRoute","fRes","fDrive","f2Cutoff","f2Res","f2Drive","fMix","fTrim"};for(auto key:fk)if(auto* par=state.getParameter(id(k,key)))par->setValueNotifyingHost(par->getDefaultValue());}
@@ -408,7 +426,11 @@ class Editor final:public juce::AudioProcessorEditor,private juce::ListBoxModel,
   WavePreview preview;
   std::array<std::unique_ptr<SA>,9> oscAtt;std::unique_ptr<CA> modeAtt,oscWaveAtt;std::unique_ptr<BA> syncAtt,ringAtt;
   std::unique_ptr<juce::FileChooser> chooser;
-  bool grainPage=false,filterPage=false,filterModPage=false;
+  bool grainPage=false,filterPage=false,filterModPage=false,lfoPage=false;
+  int selectedLfo=0;juce::TextButton lfoButton{"LFO"};std::array<juce::TextButton,8> lfoTabs;
+  std::array<juce::ComboBox,4> lfoBoxes;std::array<juce::Label,4> lfoBoxLabels;std::array<juce::Slider,3> lfoKnobs;std::array<juce::Label,3> lfoLabels;std::array<std::unique_ptr<CA>,4> lfoChoiceAtt;std::array<std::unique_ptr<SA>,3> lfoSliderAtt;
+  void bindLfo(int i){selectedLfo=i;for(auto& a:lfoChoiceAtt)a.reset();for(auto& a:lfoSliderAtt)a.reset();for(int j=0;j<4;++j)lfoChoiceAtt[j]=std::make_unique<CA>(p.state,lid(i,lfoKeys[j]),lfoBoxes[j]);for(int j=0;j<3;++j)lfoSliderAtt[j]=std::make_unique<SA>(p.state,lid(i,lfoKeys[j+4]),lfoKnobs[j]);for(int j=0;j<8;++j)lfoTabs[j].setToggleState(i==j,juce::dontSendNotification);}
+  void setLfoPage(bool show){lfoPage=show;filterPage=false;filterModPage=false;setOscPage(false);if(show)bindLfo(selectedLfo);}
   juce::TextButton filterModButton{"MODULATION"};
   std::array<juce::Slider,9> filterModKnobs;std::array<juce::Label,9> filterModText;std::array<std::unique_ptr<SA>,9> filterModAtt;
   juce::ToggleButton filterAuto{"Compensation auto"};std::unique_ptr<BA> filterAutoAtt;FilterResponse filterResponse;
@@ -438,10 +460,11 @@ class Editor final:public juce::AudioProcessorEditor,private juce::ListBoxModel,
   }
   void setOscPage(bool show){
     if(show)filterPage=false;oscPage=show;oscPageButton.setButtonText(show?"COUCHE":"OSCILLATEURS");
-    wave.setVisible(!show&&!filterPage);enabled.setVisible(!show&&!filterPage);
-    filterButton.setVisible(!show);filterButton.setButtonText(filterPage?"COUCHE":"FILTRES");oscPageButton.setVisible(!filterPage);
+    wave.setVisible(!show&&!filterPage&&!lfoPage);enabled.setVisible(!show&&!filterPage&&!lfoPage);
+    lfoButton.setButtonText(lfoPage?"COUCHE":"LFO");for(auto& t:lfoTabs)t.setVisible(lfoPage);for(int j=0;j<4;++j){lfoBoxes[j].setVisible(lfoPage);lfoBoxLabels[j].setVisible(lfoPage);}for(int j=0;j<3;++j){lfoKnobs[j].setVisible(lfoPage);lfoLabels[j].setVisible(lfoPage);}
+    filterButton.setVisible(!show&&!lfoPage);filterButton.setButtonText(filterPage?"COUCHE":"FILTRES");oscPageButton.setVisible(!filterPage&&!lfoPage);
     bool mainFilter=filterPage&&!filterModPage,modFilter=filterPage&&filterModPage;filterModButton.setVisible(filterPage);filterModButton.setButtonText(modFilter?"RÉPONSE":"MODULATION");filterAuto.setVisible(modFilter);filterResponse.setVisible(mainFilter);filterA.setVisible(mainFilter);filterB.setVisible(mainFilter);filterRoute.setVisible(mainFilter);for(int j=0;j<8;++j){filterKnobs[j].setVisible(mainFilter);filterText[j].setVisible(mainFilter);}for(int j=0;j<9;++j){filterModKnobs[j].setVisible(modFilter);filterModText[j].setVisible(modFilter);}
-    for(int j=0;j<8;++j){knobs[j].setVisible(!show&&!filterPage);labels[j].setVisible(!show&&!filterPage);}
+    for(int j=0;j<8;++j){knobs[j].setVisible(!show&&!filterPage&&!lfoPage);labels[j].setVisible(!show&&!filterPage&&!lfoPage);}
     for(auto& t:oscTabs)t.setVisible(show);
     for(int j=0;j<9;++j){oscKnobs[j].setVisible(show);oscLabels[j].setVisible(show);}
     oscMode.setVisible(show);oscWave.setVisible(show);oscSync.setVisible(show);oscRing.setVisible(show);
@@ -547,14 +570,17 @@ public:
     for(int j=0;j<9;++j){configure(filterModKnobs[j]);label(filterModText[j],juce::String::fromUTF8(filterModLabels[j]),14);}
     filterModButton.onClick=[this]{filterModPage=!filterModPage;setOscPage(false);};add(filterModButton);
     filterButton.onClick=[this]{setFilterPage(!filterPage);};add(filterButton);
+    lfoButton.onClick=[this]{setLfoPage(!lfoPage);};add(lfoButton);for(int j=0;j<8;++j){lfoTabs[j].setButtonText("LFO "+juce::String(j+1));lfoTabs[j].onClick=[this,j]{bindLfo(j);};add(lfoTabs[j]);}
+    const juce::StringArray* lists[]={&lfoShapes,&lfoDest,&lfoLayers,&lfoDivisions};const char* boxNames[]={"Forme","Destination","Couche cible","Synchronisation"};const char* knobNames[]={"Fréquence (Hz)","Profondeur","Phase initiale"};
+    for(int j=0;j<4;++j){lfoBoxes[j].addItemList(*lists[j],1);add(lfoBoxes[j]);label(lfoBoxLabels[j],juce::String::fromUTF8(boxNames[j]),14);}for(int j=0;j<3;++j){configure(lfoKnobs[j]);label(lfoLabels[j],juce::String::fromUTF8(knobNames[j]),15);}
     selectLayer(0);setOscPage(false);timerCallback();startTimerHz(20);
     setResizable(true,true);setResizeLimits(900,570,1800,1140);if(auto* c=getConstrainer())c->setFixedAspectRatio(1200./760.);setSize(1200,760);
   }
   #ifdef COSMOS_PRESET_QA
   bool qualifyLayout(const juce::File& folder){
     bool ok=true;
-    for(int width:{900,1200,1800})for(int page=0;page<5;++page){
-      setSize(width,int(width*760./1200.));grainPage=page==2;filterPage=false;setOscPage(page==1||page==2);if(page>=3){filterModPage=page==4;setFilterPage(true);}timerCallback();
+    for(int width:{900,1200,1800})for(int page=0;page<6;++page){
+      setSize(width,int(width*760./1200.));grainPage=page==2;filterPage=false;lfoPage=false;setOscPage(page==1||page==2);if(page==3||page==4){filterModPage=page==4;setFilterPage(true);}if(page==5)setLfoPage(true);timerCallback();
       for(int i=0;i<canvas.getNumChildComponents();++i){auto* a=canvas.getChildComponent(i);if(!a->isVisible())continue;
         ok&=canvas.getLocalBounds().contains(a->getBounds());
         for(int j=i+1;j<canvas.getNumChildComponents();++j){auto* b=canvas.getChildComponent(j);if(b->isVisible()&&a->getBounds().intersects(b->getBounds())){ok=false;juce::Logger::writeToLog("Layout overlap: "+a->getName()+" / "+b->getName());}}
@@ -577,16 +603,19 @@ public:
     g.setColour(juce::Colour(0xff40566f));g.drawRoundedRectangle(14,150,266,580,8,1);g.drawRoundedRectangle(292,216,894,514,8,1);
     g.setColour(cyan.withAlpha(.65f));g.fillRect(303,218,870,2);
     g.setColour(cyan);g.setFont(17);g.drawText("BIBLIOTHÈQUE  /  270",25,162,242,28,juce::Justification::centred);
-    g.setColour(juce::Colour(0xff35495e));if(!oscPage&&!filterPage)for(int j=0;j<8;++j)g.drawRoundedRectangle(310.f+216.f*(j%4),316.f+180.f*(j/4),204.f,168.f,6.f,1.f);
+    g.setColour(juce::Colour(0xff35495e));if(!oscPage&&!filterPage&&!lfoPage)for(int j=0;j<8;++j)g.drawRoundedRectangle(310.f+216.f*(j%4),316.f+180.f*(j/4),204.f,168.f,6.f,1.f);
     if(oscPage)for(int j=0;j<10;++j)g.drawRoundedRectangle(310.f+172.f*(j%5),449.f+132.f*(j/5),164.f,126.f,6.f,1.f);
-    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.4.6  FILTER MASTER VALIDATION  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
+    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.5.0  MODULATION UNIVERSE  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
   }
   void resized()override{
     canvas.setTransform(juce::AffineTransform::scale(float(getWidth())/1200.f));canvas.setBounds(0,0,1200,760);
     search.setBounds(26,199,242,30);browser.setBounds(26,239,242,478);patchLabel.setBounds(290,101,730,32);
     masterLabel.setBounds(1040,8,140,20);master.setBounds(1045,30,130,102);
     for(int k=0;k<4;++k)tabs[k].setBounds(292+225*k,151,219,52);
-    layerTitle.setBounds(312,227,440,32);wave.setBounds(312,270,350,32);enabled.setBounds(704,270,220,32);
+    layerTitle.setBounds(312,227,280,32);lfoButton.setBounds(600,230,150,30);
+    for(int j=0;j<8;++j)lfoTabs[j].setBounds(310+107*j,270,102,32);
+    for(int j=0;j<4;++j){int x=310+216*j;lfoBoxLabels[j].setBounds(x,320,206,22);lfoBoxes[j].setBounds(x,345,206,32);}
+    for(int j=0;j<3;++j){int x=310+285*j;lfoLabels[j].setBounds(x,415,270,24);lfoKnobs[j].setBounds(x+35,450,200,205);}wave.setBounds(312,270,350,32);enabled.setBounds(704,270,220,32);
     for(int j=0;j<8;++j){int x=310+216*(j%4),y=316+180*(j/4);labels[j].setBounds(x+4,y+5,196,24);knobs[j].setBounds(x+20,y+31,164,130);}
     oscPageButton.setBounds(945,230,220,30);filterButton.setBounds(760,230,175,30);
     filterModButton.setBounds(945,230,220,30);filterAuto.setBounds(310,270,250,30);

@@ -7,6 +7,7 @@
 #include <vector>
 #include "HybridOscillator.h"
 #include "CosmosFilter.h"
+#include "CosmosLFO.h"
 
 namespace cosmos {
 constexpr int layers = 4, voices = 32;
@@ -22,7 +23,7 @@ struct Layer {
     float filterKey=0,filterVelocity=0,filterDepth=0,filterAttack=.02f,filterDecay=.3f,filterSustain=.5f,filterRelease=.4f;
     Layer(){osc[0].level=1;}
 };
-struct Patch { std::array<Layer,layers> layer{}; float master=.7f; double bpm=120.; bool experimentalGrouped=false; bool experimentalTiled=false; int experimentalInterpolation=0; bool experimentalGrainWindow=false; bool experimentalGrainPrepared=false; bool experimentalAnalog=false; bool experimentalEnv=false; };
+struct Patch { std::array<Layer,layers> layer{}; std::array<LfoParams,lfoCount> lfo{}; float master=.7f; double bpm=120.; bool experimentalGrouped=false; bool experimentalTiled=false; int experimentalInterpolation=0; bool experimentalGrainWindow=false; bool experimentalGrainPrepared=false; bool experimentalAnalog=false; bool experimentalEnv=false; };
 inline float blep(double p, double dt) noexcept {
     if(dt<=0) return 0;
     if(p<dt){ p/=dt; return float(p+p-p*p-1); }
@@ -94,8 +95,9 @@ struct Voice {
     std::array<float,layers> low{};
     std::array<std::array<FilterState,2>,layers> filters{};
     std::array<Env,layers> env{},filterEnv{};
+    std::array<LfoState,lfoCount> lfo{};
     std::array<std::array<HybridVoice,oscillatorCount>,layers> hybrid{};
-    void reset() noexcept {active=held=false;note=channel=0;velocity=0;age=0;phase={};low={};env={};filterEnv={};hybrid={};for(auto& pair:filters)for(auto& f:pair)f.reset();}
+    void reset() noexcept {active=held=false;note=channel=0;velocity=0;age=0;phase={};low={};env={};filterEnv={};lfo={};hybrid={};for(auto& pair:filters)for(auto& f:pair)f.reset();}
     void stop() noexcept {held=false;for(auto& e:env)e.stop();for(auto& e:filterEnv)e.stop();}
 };
 class Engine {
@@ -148,7 +150,8 @@ public:
       if(!any)return;
       std::array<float,layers> alpha{},gl{},gr{};
       std::array<EnvPlan,layers> envelopes{},filterEnvelopes{};
-      std::array<bool,layers> modulated{};
+      std::array<bool,layers> modulated{},lfoCutoff{};std::array<int,lfoCount> activeLfo{};std::array<double,lfoCount> lfoStep{};int activeCount=0;
+      for(int i=0;i<lfoCount;++i){const auto& l=patch.lfo[i];if(l.destination<=0||l.destination>4||l.depth==0)continue;activeLfo[activeCount++]=i;lfoStep[i]=lfoHz(l,patch.bpm)/sr;if(l.destination==1||l.destination==2)for(int k=0;k<layers;++k)if(l.layer==0||l.layer==k+1)lfoCutoff[k]=true;}
       std::array<std::array<FilterPlan,2>,layers> filters{};
       auto analog=patch.experimentalAnalog?fastOscillator:oscillator;
       std::array<std::array<OscParams,oscillatorCount>,layers> prepared{};
@@ -166,7 +169,7 @@ public:
       }
       for(int voiceIndex=std::max(0,first);voiceIndex<std::min(voices,last);++voiceIndex){
         auto& a=v[size_t(voiceIndex)];if(!a.active)continue;
-        std::array<double,layers> dt{};auto voiceFilters=filters;auto voiceAlpha=alpha;std::array<float,layers> lastRatio{};
+        std::array<double,layers> dt{};auto voiceFilters=filters;auto voiceAlpha=alpha;std::array<float,layers> lastRatio{},lastRatioB{};
         for(int k=0;k<layers;++k)dt[k]=std::clamp(440.*std::exp2((a.note-69+patch.layer[k].tune+bend[a.channel])/12.)/sr,0.,.45);
         constexpr int tileSize=32;
         std::array<std::array<std::array<float,tileSize>,oscillatorCount>,layers> tile{};
@@ -186,10 +189,12 @@ public:
           for(int j=0;j<count;++j){
           int i=offset+j;
           float l=0,r=0;bool alive=false;
+          std::array<std::array<float,4>,layers> modulation{};
+          for(int jLfo=0;jLfo<activeCount;++jLfo){int idx=activeLfo[jLfo];const auto& source=patch.lfo[idx];float value=a.lfo[idx].tick(source,lfoStep[idx]);for(int k=0;k<layers;++k)if(source.layer==0||source.layer==k+1)modulation[k][source.destination-1]+=value;}
           for(int k=0;k<layers;++k){
             const auto& p=patch.layer[k];auto& e=a.env[k];
             float fe=a.filterEnv[k].tickPrepared(filterEnvelopes[k]);
-            if(modulated[k]&&(i%16==0)){float oct=p.filterKey*(a.note-60)/12.f+p.filterVelocity*(a.velocity-.5f)*4.f+p.filterDepth*fe;auto fa=p.filter1,fb=p.filter2;float ratio=std::exp2(std::clamp(oct,-10.f,10.f));if(ratio!=lastRatio[k]){lastRatio[k]=ratio;fa.cutoff=p.cutoff*ratio;fb.cutoff*=ratio;voiceFilters[k][0]=FilterPlan(fa,sr);voiceFilters[k][1]=FilterPlan(fb,sr);voiceAlpha[k]=voiceFilters[k][0].legacyAlpha;}}
+            if((modulated[k]||lfoCutoff[k])&&(i%16==0)){float oct=p.filterKey*(a.note-60)/12.f+p.filterVelocity*(a.velocity-.5f)*4.f+p.filterDepth*fe;auto fa=p.filter1,fb=p.filter2;float ratio=std::exp2(std::clamp(oct+2*modulation[k][0],-10.f,10.f)),ratioB=std::exp2(std::clamp(oct+2*modulation[k][1],-10.f,10.f));if(ratio!=lastRatio[k]){lastRatio[k]=ratio;fa.cutoff=p.cutoff*ratio;voiceFilters[k][0]=FilterPlan(fa,sr);voiceAlpha[k]=voiceFilters[k][0].legacyAlpha;}if(ratioB!=lastRatioB[k]){lastRatioB[k]=ratioB;fb.cutoff*=ratioB;voiceFilters[k][1]=FilterPlan(fb,sr);}}
             float env=patch.experimentalEnv?e.tickPrepared(envelopes[k]):e.tick(p,sr);alive|=e.stage!=Env::off;
             if(e.stage==Env::off)continue;
             float x=0;
@@ -206,7 +211,7 @@ public:
             a.low[k]+=voiceAlpha[k]*(x-a.low[k]);
             float filtered=p.filter1.model==0?a.low[k]:a.filters[k][0].tick(x,voiceFilters[k][0]);
             if(p.filter2.model!=1){float second=a.filters[k][1].tick(p.filterParallel?x:filtered,voiceFilters[k][1]);filtered=p.filterParallel?std::lerp(filtered,second,p.filterMix):second;}
-            float s=filtered*p.filterTrim*env;l+=s*gl[k];r+=s*gr[k];
+            float s=filtered*p.filterTrim*env;if(modulation[k][2]!=0)s*=std::clamp(1.f+modulation[k][2],0.f,2.f);if(modulation[k][3]!=0){double angle=(std::clamp(p.pan+modulation[k][3],-1.f,1.f)+1)*pi*.25;float gain=p.enabled?p.gain:0.f;l+=s*gain*float(std::cos(angle));r+=s*gain*float(std::sin(angle));}else{l+=s*gl[k];r+=s*gr[k];}
           }
           if(!alive){a.active=false;break;}
           const float g=a.velocity*.12f*patch.master;left[i]+=l*g;right[i]+=r*g;
