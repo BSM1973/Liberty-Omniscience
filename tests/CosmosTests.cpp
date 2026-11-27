@@ -346,5 +346,18 @@ int main(){
     check(delta>.001,"advanced LFO actual destination");
   }
  }
+ {
+  for(int mode=0;mode<3;++mode)for(int curve=0;curve<3;++curve)for(int play=0;play<3;++play){
+    cosmos::ModEnvParams p;p.mode=mode;p.curve=curve;p.play=play;p.depth=1;p.attack=.01f;p.hold=.01f;p.decay=.01f;p.segmentTime=.01f;p.release=.01f;p.velocity=1;
+    cosmos::ModEnvPlan plan(p,48000,120);cosmos::ModEnvState s;s.start();double energy=0;
+    for(int j=0;j<4800;++j){float y=s.tick(plan,.5f);check(std::isfinite(y)&&y>=0&&y<=.500001f,"mod envelope bounded and velocity");energy+=y*y;}
+    check(energy>0,"mod envelope signal");if(play==2)check(s.stage==cosmos::ModEnvState::off,"one shot complete");if(play==1)check(s.stage!=cosmos::ModEnvState::off,"loop remains active");
+    s.stop();for(int j=0;j<1000;++j)s.tick(plan,.5f);check(s.stage==cosmos::ModEnvState::off,"envelope release complete");
+  }
+  cosmos::ModEnvParams p;p.sync=1;p.attack=1;p.depth=1;cosmos::ModEnvPlan plan(p,48000,120);cosmos::ModEnvState s;s.start();for(int j=0;j<12000;++j)s.tick(plan,1);check(std::abs(s.level-.5f)<1e-5f,"beat envelope timing");
+  auto a=std::make_unique<cosmos::Engine>(),b=std::make_unique<cosmos::Engine>();a->prepare(48000);b->prepare(48000);cosmos::Patch dry,wet;wet.modEnv[11].destination=3;wet.modEnv[11].depth=-.8f;wet.modEnv[11].layer=1;a->noteOn(0,60,.8f);b->noteOn(0,60,.8f);double diff=0;
+  for(int block=0;block<100;++block){std::array<float,128> l{},r{},ll{},rr{};a->render(l.data(),r.data(),128,dry);b->render(ll.data(),rr.data(),128,wet);for(int j=0;j<128;++j){check(std::isfinite(ll[j]),"mod env audio finite");diff+=std::abs(ll[j]-l[j]);}}
+  check(diff>.01,"twelfth mod envelope actual audio route");
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }

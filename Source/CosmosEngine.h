@@ -8,6 +8,7 @@
 #include "HybridOscillator.h"
 #include "CosmosFilter.h"
 #include "CosmosLFO.h"
+#include "CosmosModEnvelope.h"
 
 namespace cosmos {
 constexpr int layers = 4, voices = 32;
@@ -23,7 +24,7 @@ struct Layer {
     float filterKey=0,filterVelocity=0,filterDepth=0,filterAttack=.02f,filterDecay=.3f,filterSustain=.5f,filterRelease=.4f;
     Layer(){osc[0].level=1;}
 };
-struct Patch { std::array<Layer,layers> layer{}; std::array<LfoParams,lfoCount> lfo{}; float master=.7f; double bpm=120.,ppq=0;bool transportValid=false; bool experimentalGrouped=false; bool experimentalTiled=false; int experimentalInterpolation=0; bool experimentalGrainWindow=false; bool experimentalGrainPrepared=false; bool experimentalAnalog=false; bool experimentalEnv=false; };
+struct Patch { std::array<Layer,layers> layer{}; std::array<LfoParams,lfoCount> lfo{}; std::array<ModEnvParams,modEnvCount> modEnv{}; float master=.7f; double bpm=120.,ppq=0;bool transportValid=false; bool experimentalGrouped=false; bool experimentalTiled=false; int experimentalInterpolation=0; bool experimentalGrainWindow=false; bool experimentalGrainPrepared=false; bool experimentalAnalog=false; bool experimentalEnv=false; };
 inline float blep(double p, double dt) noexcept {
     if(dt<=0) return 0;
     if(p<dt){ p/=dt; return float(p+p-p*p-1); }
@@ -95,10 +96,10 @@ struct Voice {
     std::array<float,layers> low{};
     std::array<std::array<FilterState,2>,layers> filters{};
     std::array<Env,layers> env{},filterEnv{};
-    std::array<LfoState,lfoCount> lfo{};
+    std::array<LfoState,lfoCount> lfo{};std::array<ModEnvState,modEnvCount> modEnv{};
     std::array<std::array<HybridVoice,oscillatorCount>,layers> hybrid{};
-    void reset() noexcept {active=held=false;note=channel=0;velocity=0;age=0;phase={};low={};env={};filterEnv={};lfo={};hybrid={};for(auto& pair:filters)for(auto& f:pair)f.reset();}
-    void stop() noexcept {held=false;for(auto& e:env)e.stop();for(auto& e:filterEnv)e.stop();}
+    void reset() noexcept {active=held=false;note=channel=0;velocity=0;age=0;phase={};low={};env={};filterEnv={};lfo={};modEnv={};hybrid={};for(auto& pair:filters)for(auto& f:pair)f.reset();}
+    void stop() noexcept {held=false;for(auto& e:env)e.stop();for(auto& e:filterEnv)e.stop();for(auto& e:modEnv)e.stop();}
 };
 class Engine {
     double sr=48000;
@@ -118,7 +119,7 @@ public:
       for(auto& a:v)if(!a.active){w=&a;break;}
       if(!w)w=&*std::min_element(v.begin(),v.end(),[](const Voice& a,const Voice& b){if(a.held!=b.held)return !a.held;return a.age<b.age;});
       w->reset(); w->active=w->held=true;w->note=note;w->channel=ch;w->velocity=std::clamp(velocity,0.f,1.f);w->age=++counter;
-      for(auto& e:w->env)e.start();for(auto& e:w->filterEnv)e.start();
+      for(auto& e:w->env)e.start();for(auto& e:w->filterEnv)e.start();for(auto& e:w->modEnv)e.start();
       for(int k=0;k<layers;++k)for(int o=0;o<oscillatorCount;++o)w->hybrid[k][o].seed(o,k,note,w->age);
     }
     void noteOff(int ch,int note) noexcept {
@@ -153,6 +154,8 @@ public:
       std::array<EnvPlan,layers> envelopes{},filterEnvelopes{};
       std::array<bool,layers> modulated{},lfoCutoff{},lfoOsc{};std::array<int,lfoCount> activeLfo{};std::array<double,lfoCount> lfoStep{};int activeCount=0;
       for(int i=0;i<lfoCount;++i){const auto& l=patch.lfo[i];if(l.destination<=0||l.destination>8||l.depth==0)continue;activeLfo[activeCount++]=i;lfoStep[i]=lfoHz(l,patch.bpm)/sr;if(l.destination==1||l.destination==2)for(int k=0;k<layers;++k)if(l.layer==0||l.layer==k+1)lfoCutoff[k]=true;if(l.destination>=5)for(int k=0;k<layers;++k)if(l.layer==0||l.layer==k+1)lfoOsc[k]=true;}
+      std::array<ModEnvPlan,modEnvCount> envPlans{};std::array<int,modEnvCount> activeEnv{};int envCount=0;
+      for(int i=0;i<modEnvCount;++i){const auto& m=patch.modEnv[i];if(m.destination<=0||m.destination>8||m.depth==0)continue;envPlans[i]=ModEnvPlan(m,sr,patch.bpm);activeEnv[envCount++]=i;for(int k=0;k<layers;++k)if(m.layer==0||m.layer==k+1){if(m.destination<=2)lfoCutoff[k]=true;if(m.destination>=5)lfoOsc[k]=true;}}
       std::array<std::array<FilterPlan,2>,layers> filters{};
       auto analog=patch.experimentalAnalog?fastOscillator:oscillator;
       std::array<std::array<OscParams,oscillatorCount>,layers> prepared{};
@@ -192,6 +195,7 @@ public:
           float l=0,r=0;bool alive=false;
           std::array<std::array<float,8>,layers> modulation{};
           for(int jLfo=0;jLfo<activeCount;++jLfo){int idx=activeLfo[jLfo];const auto& source=patch.lfo[idx];float value;if(source.mode==0)value=a.lfo[idx].tick(source,lfoStep[idx]);else{double cycles=freeCycles[idx]+i*lfoStep[idx];if(source.mode==2&&patch.transportValid&&source.division>0)cycles=patch.ppq*lfoHz(source,patch.bpm)*60/std::clamp(patch.bpm,20.,400.)+i*lfoStep[idx];value=lfoAt(source,cycles);}for(int k=0;k<layers;++k)if(source.layer==0||source.layer==k+1)modulation[k][source.destination-1]+=value;}
+          for(int jEnv=0;jEnv<envCount;++jEnv){int idx=activeEnv[jEnv];const auto& source=patch.modEnv[idx];float value=a.modEnv[idx].tick(envPlans[idx],a.velocity);for(int k=0;k<layers;++k)if(source.layer==0||source.layer==k+1)modulation[k][source.destination-1]+=value;}
           for(int k=0;k<layers;++k){
             const auto& p=patch.layer[k];auto& e=a.env[k];
             float fe=a.filterEnv[k].tickPrepared(filterEnvelopes[k]);
