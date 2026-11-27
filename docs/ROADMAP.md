@@ -92,3 +92,6 @@ Reuse immutable imported WAV samples and HD tables for matching path, size and m
 
 ## v0.3.15 ENGINE FINAL CONTROL candidate
 AIFF PCM16 stereo 48 kHz fixture import and restore; nine actual editor snapshots (900/1200/1800 widths, layer/oscillator/granular pages), sibling bounds intersection and canvas containment checks. Not a complete visual or text-legibility certification. v0.3.13 green 200/200 presets and 189/189 matrix per platform. Offline multicore endurance HD 90.7054% mac/62.2895% Windows; misses 2095/41. Real-time multicore remains disabled. v0.3.14 pending. No new DSP defaults.
+
+## v0.4.0 FILTER PERFECTION foundation candidate
+16 selectable new filter responses using TPT one-pole and cascaded state variable stages, plus historical and bypass. Two filters per layer, series/parallel, resonance, input drive, parallel balance and output trim. New filter page and 16 dedicated procedural presets; preserve 200 legacy presets with default historical filter and bypass second. Schema 5 migration. Impulse/frequency tests and 216 preset QA; 12 editor snapshots. Not 70 distinct circuit models yet: Ladder, Comb, Formant, self oscillation, modulation, response plot and automatic compensation remain future work. v0.3.15 must pass before merge. Multicore offline only.

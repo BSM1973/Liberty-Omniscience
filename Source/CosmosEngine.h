@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <vector>
 #include "HybridOscillator.h"
+#include "CosmosFilter.h"
 
 namespace cosmos {
 constexpr int layers = 4, voices = 32;
@@ -16,6 +17,8 @@ struct Layer {
     float gain=.45f, pan=0, tune=0, cutoff=12000, attack=.025f, decay=.35f, sustain=.8f, release=.5f;
     std::array<OscParams,oscillatorCount> osc{};
     const SampleData* sample=nullptr;
+    FilterParams filter1{},filter2{1,8000,0,0};
+    bool filterParallel=false;float filterMix=.5f,filterTrim=1.f;
     Layer(){osc[0].level=1;}
 };
 struct Patch { std::array<Layer,layers> layer{}; float master=.7f; double bpm=120.; bool experimentalGrouped=false; bool experimentalTiled=false; int experimentalInterpolation=0; bool experimentalGrainWindow=false; bool experimentalGrainPrepared=false; bool experimentalAnalog=false; bool experimentalEnv=false; };
@@ -87,6 +90,7 @@ struct Voice {
     std::uint64_t age=0;
     std::array<double,layers> phase{};
     std::array<float,layers> low{};
+    std::array<std::array<FilterState,2>,layers> filters{};
     std::array<Env,layers> env{};
     std::array<std::array<HybridVoice,oscillatorCount>,layers> hybrid{};
     void stop() noexcept {held=false;for(auto& e:env)e.stop();}
@@ -141,11 +145,12 @@ public:
       if(!any)return;
       std::array<float,layers> alpha{},gl{},gr{};
       std::array<EnvPlan,layers> envelopes{};
+      std::array<std::array<FilterPlan,2>,layers> filters{};
       auto analog=patch.experimentalAnalog?fastOscillator:oscillator;
       std::array<std::array<OscParams,oscillatorCount>,layers> prepared{};
       std::array<std::array<const SampleData*,oscillatorCount>,layers> sources{};
       for(int k=0;k<layers;++k){
-        const auto& p=patch.layer[k];envelopes[k]=EnvPlan(p,sr);
+        const auto& p=patch.layer[k];envelopes[k]=EnvPlan(p,sr);auto f=p.filter1;f.cutoff=p.cutoff;filters[k][0]=FilterPlan(f,sr);filters[k][1]=FilterPlan(p.filter2,sr);
         for(int o=0;o<oscillatorCount;++o){
           prepared[k][o]=p.osc[o];auto& x=prepared[k][o];x.experimentalGrouped=patch.experimentalGrouped;x.experimentalInterpolation=patch.experimentalInterpolation;x.grain.experimentalWindow=patch.experimentalGrainWindow;x.grain.experimentalPrepared=patch.experimentalGrainPrepared;
           if(o==0)x.wave=p.wave;
@@ -193,7 +198,9 @@ public:
             for(int o=1;o<oscillatorCount;++o)if(p.osc[o].level>0)
               x+=tiled[k][o]?tile[k][o][j]:renderHybrid(a.hybrid[k][o],prepared[k][o],sources[k][o],dt[k],sr,analog,patch.bpm);
             a.low[k]+=alpha[k]*(x-a.low[k]);
-            float s=a.low[k]*env;l+=s*gl[k];r+=s*gr[k];
+            float filtered=p.filter1.model==0?a.low[k]:a.filters[k][0].tick(x,filters[k][0]);
+            if(p.filter2.model!=1){float second=a.filters[k][1].tick(p.filterParallel?x:filtered,filters[k][1]);filtered=p.filterParallel?std::lerp(filtered,second,p.filterMix):second;}
+            float s=filtered*p.filterTrim*env;l+=s*gl[k];r+=s*gr[k];
           }
           if(!alive){a.active=false;break;}
           const float g=a.velocity*.12f*patch.master;left[i]+=l*g;right[i]+=r*g;

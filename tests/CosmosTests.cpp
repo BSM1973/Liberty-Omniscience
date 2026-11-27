@@ -241,5 +241,16 @@ int main(){
     for(int i=0;i<128;++i)check(std::abs(l[i]-ll[i])<1e-6f&&std::abs(r[i]-rr[i])<1e-6f,"adaptive worker count equivalence");
   }
  }
+ {
+  for(double sr:{44100.,48000.,96000.})for(int model=0;model<cosmos::filterModelCount;++model){
+    cosmos::FilterState f;cosmos::FilterPlan p({model,1200,.75f,.3f},sr);double energy=0;
+    for(int j=0;j<8192;++j){float y=f.tick(j==0?1.f:0.f,p);check(std::isfinite(y)&&std::abs(y)<100,"filter impulse bounded");energy+=double(y)*y;}
+    check(energy>0,"filter impulse audible");
+  }
+  for(int model:{4,5,8,9,14,15}){cosmos::FilterState low,high;cosmos::FilterPlan p({model,1000,0,0},48000);double a=0,b=0;
+    for(int j=0;j<8192;++j){float x=low.tick(float(std::sin(2*cosmos::pi*100*j/48000)),p),y=high.tick(float(std::sin(2*cosmos::pi*8000*j/48000)),p);if(j>4096){a+=x*x;b+=y*y;}}
+    check(model%2==0?a>b:b>a,"filter frequency discrimination");
+  }
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }

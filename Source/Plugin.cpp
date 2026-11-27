@@ -11,6 +11,9 @@ using ID=juce::ParameterID;
 using F=juce::AudioParameterFloat;
 using B=juce::AudioParameterBool;
 using C=juce::AudioParameterChoice;
+const juce::StringArray filterNames={"Historique","Bypass","Passe-bas 6","Passe-haut 6","Passe-bas 12","Passe-haut 12","Passe-bande 12","Coupe-bande 12","Passe-bas 24","Passe-haut 24","Passe-bande cascade","Coupe-bande cascade","Passe-bas 36","Passe-haut 36","Passe-bas 48","Passe-haut 48","Passe-bas 18","Passe-haut 18"};
+const std::array<const char*,8> filterKeys={"cutoff","fRes","fDrive","f2Cutoff","f2Res","f2Drive","fMix","fTrim"};
+const std::array<const char*,8> filterLabels={"Fréquence 1","Résonance 1","Saturation 1","Fréquence 2","Résonance 2","Saturation 2","Balance parallèle","Niveau"};
 const std::array<const char*,8> keys={"gain","pan","tune","cutoff","attack","decay","sustain","release"};
 const std::array<const char*,8> names={"Volume","Panoramique","Accordage","Fréquence","Attaque","Déclin","Sustain","Relâchement"};
 const std::array<const char*,10> categories={"Analog","Pads","Bass","Keys","Plucks","Cinematic","Leads","Textures","Bells","Soft"};
@@ -22,7 +25,7 @@ const std::array<const char*,9> grainKeys={"gSize","gDensity","gPosition","gSpre
 const std::array<const char*,9> grainNames={"Taille (ms)","Densité","Position","Dispersion","Stretch","Jitter (cents)","Blur","Début boucle","Fin boucle"};
 const std::array<const char*,3> grainFlags={"gFreeze","gReverse","gSync"};
 juce::String oid(int k,int o,const char* key){return id(k,(juce::String("osc")+juce::String(o+1)+"_"+key).toRawUTF8());}
-juce::String presetName(int i){if(i>=100)return juce::String("Granular / ")+categories[size_t((i-100)/10)]+" "+adjectives[size_t(i%10)];return juce::String(categories[size_t(i/10)])+" / "+adjectives[size_t(i%10)];}
+juce::String presetName(int i){if(i>=200)return "Filtres / "+filterNames[i-198];if(i>=100)return juce::String("Granular / ")+categories[size_t((i-100)/10)]+" "+adjectives[size_t(i%10)];return juce::String(categories[size_t(i/10)])+" / "+adjectives[size_t(i%10)];}
 State::ParameterLayout layout(){
   State::ParameterLayout p;
   p.add(std::make_unique<F>(ID{"master",1},"Volume général",0.f,1.f,.7f));
@@ -35,6 +38,11 @@ State::ParameterLayout layout(){
     add("gain","Volume",0,1,k==0?.5f:.17f);add("pan","Panoramique",-1,1,k==1?-.35f:k==2?.35f:0);
     add("tune","Accordage",-24,24,k==2?12.f:0.f);
     add("cutoff","Fréquence",20,20000,8000,.3f);
+    p.add(std::make_unique<C>(ID{id(k,"fModel"),1},id(k,"Filtre 1"),filterNames,0));
+    p.add(std::make_unique<C>(ID{id(k,"f2Model"),1},id(k,"Filtre 2"),filterNames,1));
+    p.add(std::make_unique<C>(ID{id(k,"fRoute"),1},id(k,"Routage"),juce::StringArray{"Série","Parallèle"},0));
+    add("fRes","Résonance 1",0,1,0);add("fDrive","Saturation 1",0,1,0);add("f2Cutoff","Fréquence 2",20,20000,8000,.3f);
+    add("f2Res","Résonance 2",0,1,0);add("f2Drive","Saturation 2",0,1,0);add("fMix","Balance",0,1,.5f);add("fTrim","Niveau filtres",0,2,1);
     add("attack","Attaque",.001f,8,.03f,.3f);add("decay","Déclin",.005f,8,.35f,.3f);
     add("sustain","Sustain",0,1,.75f);add("release","Relâchement",.005f,10,.5f,.3f);
     for(int o=0;o<5;++o){
@@ -59,6 +67,7 @@ public:
   cosmos::Engine engine;
   std::array<std::array<std::atomic<float>*,10>,4> params{};
   std::atomic<float>* master=nullptr;
+  std::array<std::array<std::atomic<float>*,10>,4> filterParams{};
   std::atomic<int> program{-1};
   std::array<std::array<std::array<std::atomic<float>*,13>,5>,4> oscillators{};
   std::array<std::atomic<const cosmos::SampleData*>,4> samples{};
@@ -144,6 +153,7 @@ public:
       for(auto& x:grainView[k][o])x.store(-1.f);
     }
     for(int k=0;k<4;++k){params[k][0]=state.getRawParameterValue(id(k,"enabled"));params[k][1]=state.getRawParameterValue(id(k,"wave"));for(int j=0;j<8;++j)params[k][j+2]=state.getRawParameterValue(id(k,keys[j]));}
+    for(int k=0;k<4;++k){const char* fk[]={"fModel","f2Model","fRoute","fRes","fDrive","f2Cutoff","f2Res","f2Drive","fMix","fTrim"};for(int j=0;j<10;++j)filterParams[k][j]=state.getRawParameterValue(id(k,fk[j]));}
     setCurrentProgram(0);
   }
   const juce::String getName() const override{return "Omniscience";}
@@ -164,6 +174,7 @@ public:
 #endif
     if(referenceDSPForQA){p.experimentalGrouped=false;p.experimentalTiled=false;p.experimentalInterpolation=0;p.experimentalGrainWindow=false;p.experimentalGrainPrepared=false;p.experimentalAnalog=false;p.experimentalEnv=false;}
     for(int k=0;k<4;++k){auto& l=p.layer[k];auto& a=params[k];l.enabled=a[0]->load()>.5f;l.wave=int(a[1]->load());l.gain=a[2]->load();l.pan=a[3]->load();l.tune=a[4]->load();l.cutoff=a[5]->load();l.attack=a[6]->load();l.decay=a[7]->load();l.sustain=a[8]->load();l.release=a[9]->load();l.sample=samples[k].load(std::memory_order_acquire);
+      const auto& f=filterParams[k];l.filter1={int(f[0]->load()),l.cutoff,f[3]->load(),f[4]->load()};l.filter2={int(f[1]->load()),f[5]->load(),f[6]->load(),f[7]->load()};l.filterParallel=f[2]->load()>.5f;l.filterMix=f[8]->load();l.filterTrim=f[9]->load();
       for(int o=0;o<5;++o){
         const auto& q=oscillators[k][o];auto& v=l.osc[o];v.mode=cosmos::OscMode(int(q[0]->load()));v.wave=int(q[1]->load());v.level=q[2]->load();v.tune=q[3]->load();v.unison=int(q[4]->load());v.detune=q[5]->load();v.drift=q[6]->load();v.morph=q[7]->load();v.ratio=q[8]->load();v.depth=q[9]->load();v.drive=q[10]->load();v.sync=q[11]->load()>.5f;v.ring=q[12]->load()>.5f;
         v.tableSource=int(tableParams[k][o]->load());v.userTable=tables[k].load(std::memory_order_acquire);
@@ -200,11 +211,11 @@ public:
     }
     midi.clear();
   }
-  int getNumPrograms()override{return 200;} int getCurrentProgram()override{return juce::jmax(0,program.load());}
-  const juce::String getProgramName(int i)override{return presetName(juce::jlimit(0,199,i));}
+  int getNumPrograms()override{return 216;} int getCurrentProgram()override{return juce::jmax(0,program.load());}
+  const juce::String getProgramName(int i)override{return presetName(juce::jlimit(0,215,i));}
   void changeProgramName(int,const juce::String&)override{}
   void setCurrentProgram(int i)override{
-    if(i<0||i>=200)return;
+    if(i<0||i>=216)return;
     resetOscillators();
     auto set=[&](const juce::String& key,float v){if(auto* p=state.getParameter(key))p->setValueNotifyingHost(p->convertTo0to1(v));};
     int cat=(i%100)/10,var=i%10;
@@ -215,6 +226,7 @@ public:
     const float cutoffs[]={6500,3300,950,5500,7200,4200,11000,2400,13000,1900};
     set("master",.7f);
     for(int k=0;k<4;++k){
+      set(id(k,"fModel"),0);set(id(k,"f2Model"),1);set(id(k,"fRoute"),0);set(id(k,"fRes"),0);set(id(k,"fDrive"),0);set(id(k,"f2Cutoff"),8000);set(id(k,"f2Res"),0);set(id(k,"f2Drive"),0);set(id(k,"fMix"),.5f);set(id(k,"fTrim"),1);
       set(id(k,"enabled"),k==0||((cat==1||cat==5||cat==7)?true:k<=1+(var%3==2)));
       set(id(k,"wave"),float((cat+k+var/3)%4));
       set(id(k,"gain"),k==0?.55f:.12f+.025f*float((var+k)%5));
@@ -225,7 +237,7 @@ public:
       set(id(k,"decay"),decays[cat]*(.8f+.1f*var));set(id(k,"sustain"),sustains[cat]);
       set(id(k,"release"),releases[cat]*(.75f+.1f*var+.1f*k));
     }
-    if(i>=100){
+    if(i>=100&&i<200){
       set(id(0,"attack"),.05f+.03f*var);set(id(0,"release"),.5f+.15f*cat);
       for(int k=0;k<2;++k){
         set(id(k,"enabled"),1);set(oid(k,0,"mode"),5);set(oid(k,0,"gSource"),1+(cat+k)%4);
@@ -236,10 +248,11 @@ public:
       }
       set(oid(0,1,"level"),.12f);set(oid(0,1,"mode"),1);set(oid(0,1,"morph"),var/9.f);
     }
+    if(i>=200){for(int k=0;k<4;++k){set(id(k,"enabled"),k==0);set(id(k,"wave"),1);set(id(k,"fModel"),i-198);set(id(k,"cutoff"),1200);set(id(k,"fRes"),.25f);}}
     program.store(i);
   }
   void getStateInformation(juce::MemoryBlock& dest)override{
-    auto tree=state.copyState();tree.setProperty("program",program.load(),nullptr);tree.setProperty("schema",4,nullptr);
+    auto tree=state.copyState();tree.setProperty("program",program.load(),nullptr);tree.setProperty("schema",5,nullptr);
     {std::lock_guard<std::mutex> lock(sampleMutex);for(int k=0;k<4;++k){tree.setProperty(juce::Identifier("sample"+juce::String(k)),samplePaths[k],nullptr);tree.setProperty(juce::Identifier("table"+juce::String(k)),tablePaths[k],nullptr);}}
     if(auto xml=tree.createXml())copyXmlToBinary(*xml,dest);
   }
@@ -251,7 +264,8 @@ public:
         for(auto key:grainKeys)reset(key);for(auto key:grainFlags)reset(key);reset("gWindow");reset("gSource");
       }
       if(int(t.getProperty("schema",1))<4)for(int k=0;k<4;++k)for(int o=0;o<5;++o)if(auto* par=state.getParameter(oid(k,o,"tableSource")))par->setValueNotifyingHost(0.f);
-      program.store(juce::jlimit(0,199,int(t.getProperty("program",0))));state.replaceState(t);
+      program.store(juce::jlimit(0,215,int(t.getProperty("program",0))));state.replaceState(t);
+      if(int(t.getProperty("schema",1))<5)for(int k=0;k<4;++k){const char* fk[]={"fModel","f2Model","fRoute","fRes","fDrive","f2Cutoff","f2Res","f2Drive","fMix","fTrim"};for(auto key:fk)if(auto* par=state.getParameter(id(k,key)))par->setValueNotifyingHost(par->getDefaultValue());}
       for(int k=0;k<4;++k){
         auto path=t.getProperty(juce::Identifier("sample"+juce::String(k))).toString();
         {std::lock_guard<std::mutex> lock(sampleMutex);samples[k].store(nullptr);samplePaths[k]=path;}
@@ -338,7 +352,12 @@ class Editor final:public juce::AudioProcessorEditor,private juce::ListBoxModel,
   WavePreview preview;
   std::array<std::unique_ptr<SA>,9> oscAtt;std::unique_ptr<CA> modeAtt,oscWaveAtt;std::unique_ptr<BA> syncAtt,ringAtt;
   std::unique_ptr<juce::FileChooser> chooser;
-  bool grainPage=false;
+  bool grainPage=false,filterPage=false;
+  juce::TextButton filterButton{"FILTRES"};juce::ComboBox filterA,filterB,filterRoute;
+  std::array<juce::Slider,8> filterKnobs;std::array<juce::Label,8> filterText;
+  std::array<std::unique_ptr<SA>,8> filterAtt;std::array<std::unique_ptr<CA>,3> filterChoice;
+  void bindFilters(){for(auto& a:filterAtt)a.reset();for(auto& a:filterChoice)a.reset();for(int j=0;j<8;++j)filterAtt[j]=std::make_unique<SA>(p.state,id(selected,filterKeys[j]),filterKnobs[j]);filterChoice[0]=std::make_unique<CA>(p.state,id(selected,"fModel"),filterA);filterChoice[1]=std::make_unique<CA>(p.state,id(selected,"f2Model"),filterB);filterChoice[2]=std::make_unique<CA>(p.state,id(selected,"fRoute"),filterRoute);}
+  void setFilterPage(bool show){filterPage=show;setOscPage(false);bindFilters();}
   juce::ComboBox tableBox;juce::TextButton tableImport{"Importer table WAV"};std::unique_ptr<CA> tableAtt;
   juce::TextButton grainButton{"GRAINS"};
   std::array<juce::Slider,9> grainKnobs;
@@ -359,9 +378,11 @@ class Editor final:public juce::AudioProcessorEditor,private juce::ListBoxModel,
     repaint();
   }
   void setOscPage(bool show){
-    oscPage=show;oscPageButton.setButtonText(show?"COUCHE":"OSCILLATEURS");
-    wave.setVisible(!show);enabled.setVisible(!show);
-    for(int j=0;j<8;++j){knobs[j].setVisible(!show);labels[j].setVisible(!show);}
+    if(show)filterPage=false;oscPage=show;oscPageButton.setButtonText(show?"COUCHE":"OSCILLATEURS");
+    wave.setVisible(!show&&!filterPage);enabled.setVisible(!show&&!filterPage);
+    filterButton.setVisible(!show);filterButton.setButtonText(filterPage?"COUCHE":"FILTRES");oscPageButton.setVisible(!filterPage);
+    filterA.setVisible(filterPage);filterB.setVisible(filterPage);filterRoute.setVisible(filterPage);for(int j=0;j<8;++j){filterKnobs[j].setVisible(filterPage);filterText[j].setVisible(filterPage);}
+    for(int j=0;j<8;++j){knobs[j].setVisible(!show&&!filterPage);labels[j].setVisible(!show&&!filterPage);}
     for(auto& t:oscTabs)t.setVisible(show);
     for(int j=0;j<9;++j){oscKnobs[j].setVisible(show);oscLabels[j].setVisible(show);}
     oscMode.setVisible(show);oscWave.setVisible(show);oscSync.setVisible(show);oscRing.setVisible(show);
@@ -414,7 +435,7 @@ class Editor final:public juce::AudioProcessorEditor,private juce::ListBoxModel,
   void add(juce::Component& c){canvas.addAndMakeVisible(c);}
   void label(juce::Label& l,juce::String text,float size){l.setText(text,juce::dontSendNotification);l.setFont(juce::Font(juce::FontOptions(size)));l.setColour(juce::Label::textColourId,light);l.setJustificationType(juce::Justification::centred);add(l);}
   void configure(juce::Slider& s){s.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);s.setTextBoxStyle(juce::Slider::TextBoxBelow,false,85,22);add(s);}
-  void filter(){visible.clear();auto q=search.getText();for(int i=0;i<200;++i)if(presetName(i).containsIgnoreCase(q))visible.push_back(i);browser.deselectAllRows();browser.updateContent();}
+  void filter(){visible.clear();auto q=search.getText();for(int i=0;i<216;++i)if(presetName(i).containsIgnoreCase(q))visible.push_back(i);browser.deselectAllRows();browser.updateContent();}
   int getNumRows()override{return int(visible.size());}
   void paintListBoxItem(int row,juce::Graphics& g,int w,int h,bool sel)override{if(row<0||row>=int(visible.size()))return;g.fillAll(sel?juce::Colour(0xff294b67):(row%2?ink:juce::Colour(0xff17202d)));g.setColour(light);g.setFont(14);g.drawText(presetName(visible[size_t(row)]),8,0,w-12,h,juce::Justification::centredLeft,true);}
   void selectedRowsChanged(int row)override{if(row>=0&&row<int(visible.size()))p.setCurrentProgram(visible[size_t(row)]);}
@@ -431,7 +452,7 @@ class Editor final:public juce::AudioProcessorEditor,private juce::ListBoxModel,
     waveAtt=std::make_unique<CA>(p.state,id(k,"wave"),wave);enabledAtt=std::make_unique<BA>(p.state,id(k,"enabled"),enabled);
     for(int j=0;j<4;++j)tabs[j].setToggleState(j==k,juce::dontSendNotification);
     layerTitle.setText("ÉDITION DE LA COUCHE "+juce::String::charToString(juce::juce_wchar('A'+k)),juce::dontSendNotification);
-    if(oscPage)bindOsc(selectedOsc);
+    if(oscPage)bindOsc(selectedOsc);if(filterPage)bindFilters();
   }
 public:
   explicit Editor(Processor& pr):AudioProcessorEditor(pr),p(pr){
@@ -462,14 +483,16 @@ public:
     for(int j=0;j<3;++j){grainToggles[j].setButtonText(flagNames[j]);add(grainToggles[j]);}
     grainWindowBox.addItemList({"Hann","Triangle","Trapèze"},1);add(grainWindowBox);
     grainSourceBox.addItemList({"Sample personnel","Cosmic Analog","Metal Resonance","Nebula Noise","Crystal Bell"},1);add(grainSourceBox);
+    filterA.addItemList(filterNames,1);filterB.addItemList(filterNames,1);filterRoute.addItemList({"Série","Parallèle"},1);add(filterA);add(filterB);add(filterRoute);for(int j=0;j<8;++j){configure(filterKnobs[j]);label(filterText[j],juce::String::fromUTF8(filterLabels[j]),14);}
+    filterButton.onClick=[this]{setFilterPage(!filterPage);};add(filterButton);
     selectLayer(0);setOscPage(false);timerCallback();startTimerHz(20);
     setResizable(true,true);setResizeLimits(900,570,1800,1140);if(auto* c=getConstrainer())c->setFixedAspectRatio(1200./760.);setSize(1200,760);
   }
   #ifdef COSMOS_PRESET_QA
   bool qualifyLayout(const juce::File& folder){
     bool ok=true;
-    for(int width:{900,1200,1800})for(int page=0;page<3;++page){
-      setSize(width,int(width*760./1200.));grainPage=page==2;setOscPage(page!=0);timerCallback();
+    for(int width:{900,1200,1800})for(int page=0;page<4;++page){
+      setSize(width,int(width*760./1200.));grainPage=page==2;filterPage=false;setOscPage(page==1||page==2);if(page==3)setFilterPage(true);timerCallback();
       for(int i=0;i<canvas.getNumChildComponents();++i){auto* a=canvas.getChildComponent(i);if(!a->isVisible())continue;
         ok&=canvas.getLocalBounds().contains(a->getBounds());
         for(int j=i+1;j<canvas.getNumChildComponents();++j){auto* b=canvas.getChildComponent(j);if(b->isVisible()&&a->getBounds().intersects(b->getBounds())){ok=false;juce::Logger::writeToLog("Layout overlap: "+a->getName()+" / "+b->getName());}}
@@ -491,10 +514,10 @@ public:
     g.setGradientFill(juce::ColourGradient(juce::Colour(0xff202b3c),292,216,juce::Colour(0xff141c28),292,730,false));g.fillRoundedRectangle(292,216,894,514,8);
     g.setColour(juce::Colour(0xff40566f));g.drawRoundedRectangle(14,150,266,580,8,1);g.drawRoundedRectangle(292,216,894,514,8,1);
     g.setColour(cyan.withAlpha(.65f));g.fillRect(303,218,870,2);
-    g.setColour(cyan);g.setFont(17);g.drawText("BIBLIOTHÈQUE  /  200",25,162,242,28,juce::Justification::centred);
+    g.setColour(cyan);g.setFont(17);g.drawText("BIBLIOTHÈQUE  /  216",25,162,242,28,juce::Justification::centred);
     g.setColour(juce::Colour(0xff35495e));if(!oscPage)for(int j=0;j<8;++j)g.drawRoundedRectangle(310.f+216.f*(j%4),316.f+180.f*(j/4),204.f,168.f,6.f,1.f);
     if(oscPage)for(int j=0;j<10;++j)g.drawRoundedRectangle(310.f+172.f*(j%5),449.f+132.f*(j/5),164.f,126.f,6.f,1.f);
-    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.3.15  COSMOS ENGINE FINAL CONTROL  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
+    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.4.0  FILTER PERFECTION  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
   }
   void resized()override{
     canvas.setTransform(juce::AffineTransform::scale(float(getWidth())/1200.f));canvas.setBounds(0,0,1200,760);
@@ -503,7 +526,9 @@ public:
     for(int k=0;k<4;++k)tabs[k].setBounds(292+225*k,151,219,52);
     layerTitle.setBounds(312,227,440,32);wave.setBounds(312,270,350,32);enabled.setBounds(704,270,220,32);
     for(int j=0;j<8;++j){int x=310+216*(j%4),y=316+180*(j/4);labels[j].setBounds(x+4,y+5,196,24);knobs[j].setBounds(x+20,y+31,164,130);}
-    oscPageButton.setBounds(945,230,220,30);
+    oscPageButton.setBounds(945,230,220,30);filterButton.setBounds(760,230,175,30);
+    filterA.setBounds(312,270,270,32);filterB.setBounds(590,270,270,32);filterRoute.setBounds(868,270,297,32);
+    for(int j=0;j<8;++j){int x=310+216*(j%4),y=316+180*(j/4);filterText[j].setBounds(x+4,y+5,196,24);filterKnobs[j].setBounds(x+20,y+31,164,130);}
     for(int o=0;o<5;++o)oscTabs[o].setBounds(310+172*o,270,164,30);
     oscMode.setBounds(310,310,185,30);oscWave.setBounds(500,310,155,30);tableBox.setBounds(660,310,165,30);tableImport.setBounds(830,310,160,30);importButton.setBounds(995,310,170,30);
     sampleLabel.setBounds(310,342,855,20);preview.setBounds(310,365,855,74);
