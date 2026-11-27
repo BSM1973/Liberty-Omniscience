@@ -384,5 +384,11 @@ int main(){
   check(diff>.01&&std::abs(b->matrixValues()[63]-1)<1e-6f,"macro 8 target oscillator 2 and telemetry");
   b->prepare(48000);wet=dry;wet.matrix[0]={true,23,3,1,0,1,0,0,50};b->noteOn(0,60,.8f);std::array<float,128> l{},rr{};b->render(l.data(),rr.data(),128,wet);b->controller(0,1,127);b->render(l.data(),rr.data(),128,wet);auto sm=b->matrixValues()[0];check(sm>0&&sm<.1f,"MIDI smoothing actual");for(int j=0;j<200;++j)b->render(l.data(),rr.data(),128,wet);check(b->matrixValues()[0]>.99f,"MIDI smoothing converges");
  }
+ {
+  cosmos::MatrixRoute r{true,155,3,1,0,1};r.curve=4;r.points={0,.1f,.8f,.4f,1};
+  check(std::abs(cosmos::matrixValue(.375f,r)-.45f)<1e-6f,"custom curve interpolation");
+  r.polarity=1;check(std::abs(cosmos::matrixValue(.3125f,r)+.45f)<1e-6f,"custom curve signed interpolation");
+  auto e=std::make_unique<cosmos::Engine>();e->prepare(48000);cosmos::Patch p;p.lfo[0].destination=3;p.lfo[0].depth=.5f;p.lfo[0].rate=2;e->noteOn(0,60,.8f);std::array<float,128> l{},rr{};e->render(l.data(),rr.data(),128,p);check(std::abs(e->lfoPhases()[0]-127.f*2/48000)<1e-5f,"LFO phase telemetry");
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }

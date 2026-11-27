@@ -98,9 +98,9 @@ struct Voice {
     std::array<std::array<FilterState,2>,layers> filters{};
     std::array<Env,layers> env{},filterEnv{};
     std::array<LfoState,lfoCount> lfo{};std::array<ModEnvState,modEnvCount> modEnv{};
-    std::array<float,matrixCount> routeSmooth{},routeView{};std::array<bool,matrixCount> routeInit{};std::array<float,lfoCount> lfoFeedback{};
+    std::array<float,matrixCount> routeSmooth{},routeView{};std::array<bool,matrixCount> routeInit{};std::array<float,lfoCount> lfoFeedback{},lfoPhaseView{};
     std::array<std::array<HybridVoice,oscillatorCount>,layers> hybrid{};
-    void reset() noexcept {active=held=false;note=channel=0;velocity=0;age=0;phase={};low={};env={};filterEnv={};lfo={};modEnv={};routeSmooth={};routeView={};routeInit={};lfoFeedback={};hybrid={};for(auto& pair:filters)for(auto& f:pair)f.reset();}
+    void reset() noexcept {active=held=false;note=channel=0;velocity=0;age=0;phase={};low={};env={};filterEnv={};lfo={};modEnv={};routeSmooth={};routeView={};routeInit={};lfoFeedback={};lfoPhaseView={};hybrid={};for(auto& pair:filters)for(auto& f:pair)f.reset();}
     void stop() noexcept {held=false;for(auto& e:env)e.stop();for(auto& e:filterEnv)e.stop();for(auto& e:modEnv)e.stop();}
 };
 class Engine {
@@ -150,6 +150,7 @@ public:
       return out;
     }
     std::array<float,matrixCount> matrixValues()const noexcept{for(const auto& a:v)if(a.active)return a.routeView;return {};}
+    std::array<float,lfoCount> lfoPhases()const noexcept{for(const auto& a:v)if(a.active)return a.lfoPhaseView;std::array<float,lfoCount> result;result.fill(-1);return result;}
     bool voiceActive(int index)const noexcept{return index>=0&&index<voices&&v[size_t(index)].active;}
     void render(float* left,float* right,int n,const Patch& patch) noexcept {if(n<=0)return;renderRange(left,right,n,patch,0,voices);for(int i=0;i<lfoCount;++i)if(patch.lfo[i].mode!=0){freeCycles[i]+=n*lfoHz(patch.lfo[i],patch.bpm)/sr;if(freeCycles[i]>=4294967296.)freeCycles[i]-=4294967296.;}}
     // Disjoint ranges may be processed concurrently with immutable patch and MIDI state.
@@ -183,7 +184,7 @@ public:
       }
       for(int voiceIndex=std::max(0,first);voiceIndex<std::min(voices,last);++voiceIndex){
         auto& a=v[size_t(voiceIndex)];if(!a.active)continue;
-        for(int ri=0;ri<matrixCount;++ri)if(!validRoute(patch.matrix[ri])){a.routeView[ri]=0;a.routeInit[ri]=false;}
+        a.lfoPhaseView.fill(-1);for(int ri=0;ri<matrixCount;++ri)if(!validRoute(patch.matrix[ri])){a.routeView[ri]=0;a.routeInit[ri]=false;}
         std::array<double,layers> dt{};auto voiceFilters=filters;auto voiceAlpha=alpha;std::array<float,layers> lastRatio{},lastRatioB{},lastResA{},lastResB{};lastResA.fill(-1);lastResB.fill(-1);
         for(int k=0;k<layers;++k)dt[k]=std::clamp(440.*std::exp2((a.note-69+patch.layer[k].tune+bend[a.channel])/12.)/sr,0.,.45);
         constexpr int tileSize=32;
@@ -205,7 +206,7 @@ public:
           int i=offset+j;
           float l=0,r=0;bool alive=false;
           std::array<std::array<float,matrixDestCount>,layers> modulation{};std::array<float,matrixSourceCount> rawValues{};std::array<std::array<std::array<float,6>,oscillatorCount>,layers> oscMod{};std::array<float,lfoCount> nextFeedback{};
-          for(int jLfo=0;jLfo<activeCount;++jLfo){int idx=activeLfo[jLfo];const auto& source=patch.lfo[idx];auto raw=source;raw.depth=1;raw.polarity=0;float value;if(source.mode==0)value=a.lfo[idx].tick(raw,lfoStep[idx]);else{double cycles=freeCycles[idx]+i*lfoStep[idx];if(source.mode==2&&patch.transportValid&&source.division>0)cycles=patch.ppq*lfoHz(source,patch.bpm)*60/std::clamp(patch.bpm,20.,400.)+i*lfoStep[idx];value=lfoAt(raw,cycles);}value=std::clamp(value*std::clamp(1.f+a.lfoFeedback[idx],0.f,2.f),-1.f,1.f);rawValues[idx+1]=.5f+.5f*value;value=(source.polarity?rawValues[idx+1]:value)*source.depth;if(source.destination>0&&source.destination<=8)for(int k=0;k<layers;++k)if(source.layer==0||source.layer==k+1)modulation[k][source.destination-1]+=value;}
+          for(int jLfo=0;jLfo<activeCount;++jLfo){int idx=activeLfo[jLfo];const auto& source=patch.lfo[idx];auto raw=source;raw.depth=1;raw.polarity=0;float value;if(source.mode==0){a.lfoPhaseView[idx]=float(a.lfo[idx].phase);value=a.lfo[idx].tick(raw,lfoStep[idx]);}else{double cycles=freeCycles[idx]+i*lfoStep[idx];if(source.mode==2&&patch.transportValid&&source.division>0)cycles=patch.ppq*lfoHz(source,patch.bpm)*60/std::clamp(patch.bpm,20.,400.)+i*lfoStep[idx];a.lfoPhaseView[idx]=float(cycles-std::floor(cycles));value=lfoAt(raw,cycles);}value=std::clamp(value*std::clamp(1.f+a.lfoFeedback[idx],0.f,2.f),-1.f,1.f);rawValues[idx+1]=.5f+.5f*value;value=(source.polarity?rawValues[idx+1]:value)*source.depth;if(source.destination>0&&source.destination<=8)for(int k=0;k<layers;++k)if(source.layer==0||source.layer==k+1)modulation[k][source.destination-1]+=value;}
           for(int jEnv=0;jEnv<envCount;++jEnv){int idx=activeEnv[jEnv];const auto& source=patch.modEnv[idx];float value=a.modEnv[idx].tick(envPlans[idx],a.velocity);rawValues[9+idx]=value;if(source.destination>0&&source.destination<=8)for(int k=0;k<layers;++k)if(source.layer==0||source.layer==k+1)modulation[k][source.destination-1]+=value*source.depth;}
           for(int route=0;route<routeCount;++route){const auto& m=patch.matrix[routes[route]];float raw=0;
             if(m.source<=20)raw=rawValues[m.source];else if(m.source==21)raw=a.velocity;else if(m.source==22)raw=std::clamp(a.note/127.f,0.f,1.f);else if(m.source==23)raw=midiTables[0][a.channel][1];else if(m.source==24)raw=channelPressure[a.channel];else if(m.source==25)raw=midiTables[1][a.channel][std::clamp(a.note,0,127)];else if(m.source==26)raw=std::clamp(.5f+bend[a.channel]*.25f,0.f,1.f);else if(m.source<=154)raw=midiTables[0][a.channel][m.source-27];else raw=patch.macros[m.source-155];

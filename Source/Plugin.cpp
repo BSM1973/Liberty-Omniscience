@@ -40,8 +40,8 @@ const std::array<const char*,15> envKeys={"mode","play","curve","sync","destinat
 juce::String eid(int i,const char* k){return "modenv"+juce::String(i+1)+"_"+k;}
 const juce::StringArray matrixSources=[](){juce::StringArray a{"Aucune"};for(int i=1;i<=8;++i)a.add("LFO "+juce::String(i));for(int i=1;i<=12;++i)a.add("ENV "+juce::String(i));a.addArray({"Vélocité","Suivi clavier","Molette (CC1)","Aftertouch canal","Aftertouch polyphonique","Pitch Bend"});for(int i=0;i<128;++i)a.add("MIDI CC "+juce::String(i));for(int i=1;i<=8;++i)a.add("Macro "+juce::String(i));return a;}();
 const juce::StringArray matrixDests=[](){auto a=lfoDest;a.addArray({"Profondeur FM / AM","Ratio FM / AM","Résonance A","Résonance B"});for(int i=1;i<=8;++i)a.add("Profondeur LFO "+juce::String(i));return a;}();
-const juce::StringArray matrixOscs={"Tous","OSC 1","OSC 2","OSC 3","OSC 4","OSC 5"},matrixCurves={"Linéaire","Quadratique","Racine","Seuil"};
-const std::array<const char*,9> matrixKeys={"enabled","source","destination","layer","polarity","amount","oscillator","curve","smoothing"};
+const juce::StringArray matrixOscs={"Tous","OSC 1","OSC 2","OSC 3","OSC 4","OSC 5"},matrixCurves={"Linéaire","Quadratique","Racine","Seuil","Personnalisée"};
+const std::array<const char*,14> matrixKeys={"enabled","source","destination","layer","polarity","amount","oscillator","curve","smoothing","point0","point1","point2","point3","point4"};
 juce::String macroId(int i){return "macro"+juce::String(i+1);}
 juce::String mid(int i,const char* k){return "matrix"+juce::String(i+1)+"_"+k;}
 State::ParameterLayout layout(){
@@ -97,7 +97,7 @@ State::ParameterLayout layout(){
   for(int i=0;i<cosmos::matrixCount;++i){
     auto choice=[&](const char* key,const juce::StringArray& a){p.add(std::make_unique<C>(ID{mid(i,key),1},mid(i,key),a,0));};
     p.add(std::make_unique<B>(ID{mid(i,"enabled"),1},mid(i,"enabled"),false));choice("source",matrixSources);choice("destination",matrixDests);choice("layer",lfoLayers);choice("polarity",juce::StringArray{"Unipolaire","Bipolaire"});
-    p.add(std::make_unique<F>(ID{mid(i,"amount"),1},mid(i,"amount"),-1.f,1.f,0.f));choice("oscillator",matrixOscs);choice("curve",matrixCurves);p.add(std::make_unique<F>(ID{mid(i,"smoothing"),1},mid(i,"smoothing"),0.f,200.f,0.f));
+    p.add(std::make_unique<F>(ID{mid(i,"amount"),1},mid(i,"amount"),-1.f,1.f,0.f));choice("oscillator",matrixOscs);choice("curve",matrixCurves);p.add(std::make_unique<F>(ID{mid(i,"smoothing"),1},mid(i,"smoothing"),0.f,200.f,0.f));for(int j=0;j<5;++j)p.add(std::make_unique<F>(ID{mid(i,matrixKeys[9+j]),1},mid(i,matrixKeys[9+j]),0.f,1.f,j*.25f));
   }
   for(int i=0;i<8;++i)p.add(std::make_unique<F>(ID{macroId(i),1},macroId(i),0.f,1.f,0.f));
   return p;
@@ -110,8 +110,8 @@ public:
   std::atomic<float>* master=nullptr;
   std::array<std::array<std::atomic<float>*,9>,cosmos::lfoCount> lfoParams{};
   std::array<std::array<std::atomic<float>*,15>,cosmos::modEnvCount> modEnvParams{};
-  std::array<std::array<std::atomic<float>*,9>,cosmos::matrixCount> matrixParams{};
-  std::array<std::atomic<float>*,8> macroParams{};std::array<std::atomic<float>,cosmos::matrixCount> matrixView{};std::atomic<int> learnRow{-1},learnResult{-1};
+  std::array<std::array<std::atomic<float>*,14>,cosmos::matrixCount> matrixParams{};
+  std::array<std::atomic<float>*,8> macroParams{};std::array<std::atomic<float>,cosmos::matrixCount> matrixView{};std::array<std::atomic<float>,8> lfoPhaseView{};std::atomic<int> learnRow{-1},learnResult{-1};
   std::array<std::array<std::atomic<float>*,11>,4> filterParams{};
   std::array<std::array<std::atomic<float>*,9>,4> filterModParams{};
   std::atomic<int> program{-1};
@@ -203,7 +203,7 @@ public:
     for(int k=0;k<4;++k)for(int j=0;j<9;++j)filterModParams[k][j]=state.getRawParameterValue(id(k,filterModKeys[j]));
     for(int i=0;i<cosmos::lfoCount;++i)for(int j=0;j<9;++j)lfoParams[i][j]=state.getRawParameterValue(lid(i,lfoKeys[j]));
     for(int i=0;i<cosmos::modEnvCount;++i)for(int j=0;j<15;++j)modEnvParams[i][j]=state.getRawParameterValue(eid(i,envKeys[j]));
-    for(int i=0;i<cosmos::matrixCount;++i)for(int j=0;j<9;++j)matrixParams[i][j]=state.getRawParameterValue(mid(i,matrixKeys[j]));
+    for(int i=0;i<cosmos::matrixCount;++i)for(int j=0;j<14;++j)matrixParams[i][j]=state.getRawParameterValue(mid(i,matrixKeys[j]));
     for(int i=0;i<8;++i)macroParams[i]=state.getRawParameterValue(macroId(i));
     setCurrentProgram(0);
   }
@@ -218,7 +218,7 @@ public:
     cosmos::Patch p;p.master=master->load();
     for(int i=0;i<cosmos::lfoCount;++i){const auto& x=lfoParams[i];p.lfo[i]={int(x[0]->load()),int(x[1]->load()),int(x[2]->load()),int(x[3]->load()),x[4]->load(),x[5]->load(),x[6]->load(),int(x[7]->load()),int(x[8]->load())};}
     for(int i=0;i<cosmos::modEnvCount;++i){const auto& x=modEnvParams[i];p.modEnv[i]={int(x[0]->load()),int(x[1]->load()),int(x[2]->load()),int(x[3]->load()),int(x[4]->load()),int(x[5]->load()),x[6]->load(),x[7]->load(),x[8]->load(),x[9]->load(),x[10]->load(),x[11]->load(),x[12]->load(),x[13]->load(),x[14]->load()};}
-    for(int i=0;i<cosmos::matrixCount;++i){const auto& x=matrixParams[i];p.matrix[i]={x[0]->load()>.5f,int(x[1]->load()),int(x[2]->load()),int(x[3]->load()),int(x[4]->load()),x[5]->load(),int(x[6]->load()),int(x[7]->load()),x[8]->load()};}
+    for(int i=0;i<cosmos::matrixCount;++i){const auto& x=matrixParams[i];p.matrix[i]={x[0]->load()>.5f,int(x[1]->load()),int(x[2]->load()),int(x[3]->load()),int(x[4]->load()),x[5]->load(),int(x[6]->load()),int(x[7]->load()),x[8]->load()};for(int j=0;j<5;++j)p.matrix[i].points[j]=x[9+j]->load();}
     for(int i=0;i<8;++i)p.macros[i]=macroParams[i]->load();
     p.experimentalGrouped=true;p.experimentalTiled=true;p.experimentalInterpolation=1;
 #if defined(_M_X64)
@@ -258,7 +258,7 @@ public:
       else if(m.isChannelPressure())engine.pressure(ch,m.getChannelPressureValue());else if(m.isAftertouch())engine.polyAftertouch(ch,m.getNoteNumber(),m.getAfterTouchValue());
     }
     engine.render(l+pos,r+pos,n-pos,p);
-    auto mv=engine.matrixValues();for(int j=0;j<cosmos::matrixCount;++j)matrixView[j].store(mv[j],std::memory_order_relaxed);
+    auto phases=engine.lfoPhases();for(int j=0;j<8;++j)lfoPhaseView[j].store(phases[j],std::memory_order_relaxed);auto mv=engine.matrixValues();for(int j=0;j<cosmos::matrixCount;++j)matrixView[j].store(mv[j],std::memory_order_relaxed);
     for(int i=0;i<n;++i){l[i]=std::tanh(l[i]);r[i]=std::tanh(r[i]);}
     for(int k=0;k<4;++k)for(int o=0;o<5;++o){
       const auto& z=p.layer[k].osc[o];
@@ -274,7 +274,7 @@ public:
   void changeProgramName(int,const juce::String&)override{}
   void setCurrentProgram(int i)override{
     if(i<0||i>=270)return;
-    resetOscillators();
+    resetOscillators();for(int j=0;j<8;++j)state.state.removeProperty(juce::Identifier(macroId(j)+"Name"),nullptr);
     for(int j=0;j<cosmos::lfoCount;++j)for(auto key:lfoKeys)if(auto* par=state.getParameter(lid(j,key)))par->setValueNotifyingHost(par->getDefaultValue());
     for(int j=0;j<cosmos::modEnvCount;++j)for(auto key:envKeys)if(auto* par=state.getParameter(eid(j,key)))par->setValueNotifyingHost(par->getDefaultValue());
     for(int j=0;j<cosmos::matrixCount;++j)for(auto key:matrixKeys)if(auto* par=state.getParameter(mid(j,key)))par->setValueNotifyingHost(par->getDefaultValue());
@@ -316,7 +316,7 @@ public:
     program.store(i);
   }
   void getStateInformation(juce::MemoryBlock& dest)override{
-    auto tree=state.copyState();tree.setProperty("program",program.load(),nullptr);tree.setProperty("schema",12,nullptr);
+    auto tree=state.copyState();tree.setProperty("program",program.load(),nullptr);tree.setProperty("schema",13,nullptr);
     {std::lock_guard<std::mutex> lock(sampleMutex);for(int k=0;k<4;++k){tree.setProperty(juce::Identifier("sample"+juce::String(k)),samplePaths[k],nullptr);tree.setProperty(juce::Identifier("table"+juce::String(k)),tablePaths[k],nullptr);}}
     if(auto xml=tree.createXml())copyXmlToBinary(*xml,dest);
   }
@@ -328,7 +328,7 @@ public:
         for(auto key:grainKeys)reset(key);for(auto key:grainFlags)reset(key);reset("gWindow");reset("gSource");
       }
       if(int(t.getProperty("schema",1))<4)for(int k=0;k<4;++k)for(int o=0;o<5;++o)if(auto* par=state.getParameter(oid(k,o,"tableSource")))par->setValueNotifyingHost(0.f);
-      program.store(juce::jlimit(0,269,int(t.getProperty("program",0))));state.replaceState(t);learnRow.store(-1);learnResult.store(-1);
+      program.store(juce::jlimit(0,269,int(t.getProperty("program",0))));state.replaceState(t);if(int(t.getProperty("schema",1))<13)for(int i=0;i<cosmos::matrixCount;++i)for(int j=9;j<14;++j)if(auto* par=state.getParameter(mid(i,matrixKeys[j])))par->setValueNotifyingHost(par->getDefaultValue());learnRow.store(-1);learnResult.store(-1);
       if(int(t.getProperty("schema",1))<12){for(int j=0;j<cosmos::matrixCount;++j)for(auto key:{"oscillator","curve","smoothing"})if(auto* par=state.getParameter(mid(j,key)))par->setValueNotifyingHost(par->getDefaultValue());for(int j=0;j<8;++j)if(auto* par=state.getParameter(macroId(j)))par->setValueNotifyingHost(0.f);}
       if(int(t.getProperty("schema",1))<11)for(int j=0;j<cosmos::matrixCount;++j)for(auto key:matrixKeys)if(auto* par=state.getParameter(mid(j,key)))par->setValueNotifyingHost(par->getDefaultValue());
       if(int(t.getProperty("schema",1))<10)for(int j=0;j<cosmos::modEnvCount;++j)for(auto key:envKeys)if(auto* par=state.getParameter(eid(j,key)))par->setValueNotifyingHost(par->getDefaultValue());
@@ -353,13 +353,14 @@ const auto cyan=juce::Colour(0xff64cbe9), ink=juce::Colour(0xff101722), panel=ju
 class Theme final:public juce::LookAndFeel_V4{
 public:
   Theme(){setColour(juce::Slider::textBoxTextColourId,light);setColour(juce::Slider::textBoxBackgroundColourId,ink);setColour(juce::Slider::textBoxOutlineColourId,panel);setColour(juce::TextButton::buttonColourId,panel);setColour(juce::TextButton::buttonOnColourId,juce::Colour(0xff326181));setColour(juce::TextButton::textColourOffId,light);setColour(juce::TextButton::textColourOnId,juce::Colours::white);setColour(juce::ComboBox::backgroundColourId,panel);setColour(juce::ComboBox::textColourId,light);setColour(juce::ToggleButton::textColourId,light);setColour(juce::ListBox::backgroundColourId,ink);}
-  void drawRotarySlider(juce::Graphics& g,int x,int y,int w,int h,float pos,float start,float end,juce::Slider&)override{
+  void drawRotarySlider(juce::Graphics& g,int x,int y,int w,int h,float pos,float start,float end,juce::Slider& slider)override{
     auto rect=juce::Rectangle<float>(float(x),float(y),float(w),float(h)).reduced(12);
     float r=std::min(rect.getWidth(),rect.getHeight())*.43f;auto c=rect.getCentre();auto knob=juce::Rectangle<float>(2*r,2*r).withCentre(c);
     g.setColour(juce::Colour(0xff0b1119));g.fillEllipse(knob.expanded(5));
     g.setGradientFill(juce::ColourGradient(juce::Colour(0xff53677f),c.x,c.y-r,juce::Colour(0xff192331),c.x,c.y+r,false));g.fillEllipse(knob);
     g.setColour(juce::Colour(0xff72859b));g.drawEllipse(knob,1.f);
     juce::Path arc;arc.addCentredArc(c.x,c.y,r+5,r+5,0,start,start+pos*(end-start),true);juce::Path track;track.addCentredArc(c.x,c.y,r+5,r+5,0,start,end,true);g.setColour(juce::Colour(0xff34485d));g.strokePath(track,juce::PathStrokeType(2.5f));g.setColour(cyan.withAlpha(.18f));g.strokePath(arc,juce::PathStrokeType(6.f));g.setColour(cyan);g.strokePath(arc,juce::PathStrokeType(2.5f));
+    if(bool(slider.getProperties().getWithDefault("modAssigned",false))){float v=float(slider.getProperties().getWithDefault("modValue",0.f));float target=std::clamp(pos+v*.25f,0.f,1.f);juce::Path mod;mod.addCentredArc(c.x,c.y,r+9,r+9,0,start+std::min(pos,target)*(end-start),start+std::max(pos,target)*(end-start)+.015f,true);g.setColour(juce::Colour(0xff5de0bb));g.strokePath(mod,juce::PathStrokeType(2.f));g.setColour(juce::Colour(0xff5de0bb).withAlpha(.6f));g.drawEllipse(knob.expanded(9),.7f);g.setColour(cyan);}
     float a=start+pos*(end-start);g.drawLine(c.x+std::sin(a)*r*.45f,c.y-std::cos(a)*r*.45f,c.x+std::sin(a)*r*.83f,c.y-std::cos(a)*r*.83f,2.5f);
   }
 };
@@ -451,14 +452,14 @@ public:
     }
 };
 class LfoOverview final:public juce::Component{
-  std::array<cosmos::LfoParams,cosmos::lfoCount> values{};int selected=0;
+  std::array<cosmos::LfoParams,cosmos::lfoCount> values{};int selected=0;std::array<float,8> phases{};
 public:
-  void update(const std::array<cosmos::LfoParams,cosmos::lfoCount>& p,int index){values=p;selected=index;repaint();}
+  void update(const std::array<cosmos::LfoParams,cosmos::lfoCount>& p,int index,const std::array<float,8>& phase){values=p;selected=index;phases=phase;repaint();}
   void paint(juce::Graphics& g)override{
     float w=getWidth()/8.f;
     for(int k=0;k<8;++k){auto area=juce::Rectangle<float>(k*w,0,w, float(getHeight())).reduced(3);g.setColour(juce::Colour(0xff101b29));g.fillRoundedRectangle(area,5);g.setColour(k==selected?cyan:juce::Colour(0xff40566f));g.drawRoundedRectangle(area,5,1);
       auto graph=area.reduced(5);graph.removeFromTop(15);graph.removeFromBottom(4);g.setFont(11);g.drawText("LFO "+juce::String(k+1),area.toNearestInt().removeFromTop(15),juce::Justification::centred);
-      juce::Path path;for(int j=0;j<=96;++j){float x=graph.getX()+j*graph.getWidth()/96;auto v=values[k];v.depth=1;float y=graph.getCentreY()-cosmos::lfoAt(v,j/96.)*graph.getHeight()*.44f;if(j==0)path.startNewSubPath(x,y);else path.lineTo(x,y);}g.strokePath(path,juce::PathStrokeType(1.3f));}
+      juce::Path path;for(int j=0;j<=96;++j){float x=graph.getX()+j*graph.getWidth()/96;auto v=values[k];v.depth=1;float y=graph.getCentreY()-cosmos::lfoAt(v,j/96.)*graph.getHeight()*.44f;if(j==0)path.startNewSubPath(x,y);else path.lineTo(x,y);}g.strokePath(path,juce::PathStrokeType(1.3f));if(phases[k]>=0){g.setColour(juce::Colour(0xff5de0bb));g.drawVerticalLine(int(graph.getX()+phases[k]*graph.getWidth()),graph.getY(),graph.getBottom());}}
   }
 };
 class ModEnvelopeView final:public juce::Component{
@@ -494,26 +495,55 @@ public:
   void mouseDown(const juce::MouseEvent& e)override{if(e.mods.isPopupMenu()){if(onLearn)onLearn();return;}juce::TextButton::mouseDown(e);}
   void mouseUp(const juce::MouseEvent& e)override{if(!e.mods.isPopupMenu())juce::TextButton::mouseUp(e);}
 };
-class Editor final:public juce::AudioProcessorEditor,private juce::ListBoxModel,private juce::Timer{
+class ModSlider final:public juce::Slider,public juce::DragAndDropTarget{
+public:
+  int destination=0;bool individual=false;
+  std::function<void(int)> assign;
+  bool isInterestedInDragSource(const SourceDetails& d)override{return destination>0&&d.description.toString().startsWith("cosmos-source:");}
+  void itemDropped(const SourceDetails& d)override{if(isInterestedInDragSource(d)&&assign)assign(d.description.toString().fromFirstOccurrenceOf(":",false,false).getIntValue());}
+  void mouseDown(const juce::MouseEvent& e)override{if(destination>0&&e.mods.isPopupMenu()){if(assign)assign(-1);return;}juce::Slider::mouseDown(e);}
+  void mouseUp(const juce::MouseEvent& e)override{if(!(destination>0&&e.mods.isPopupMenu()))juce::Slider::mouseUp(e);}
+};
+class ModDrag final:public juce::TextButton{
+public:
+  std::function<int()> source;
+  void mouseDrag(const juce::MouseEvent& e)override{if(e.getDistanceFromDragStart()>5)if(auto* d=juce::DragAndDropContainer::findParentDragContainerFor(this))if(!d->isDragAndDropActive()&&source){int i=source();if(i>0)d->startDragging("cosmos-source:"+juce::String(i),this);}}
+};
+class CustomRouteCurve final:public juce::Component{
+  std::array<float,5> points{0,.25f,.5f,.75f,1};int handle=-1;
+  void edit(const juce::MouseEvent& e,bool begin,bool end){if(handle>=0&&onEdit)onEdit(handle,std::clamp(1.f-(e.position.y-8)/std::max(1.f,getHeight()-16.f),0.f,1.f),begin,end);}
+public:
+  std::function<void(int,float,bool,bool)> onEdit;
+  void update(std::array<float,5> p){if(points!=p){points=p;repaint();}}
+  void mouseDown(const juce::MouseEvent& e)override{handle=std::clamp(int(std::round((e.position.x-8)*4/std::max(1.f,getWidth()-16.f))),0,4);edit(e,true,false);}
+  void mouseDrag(const juce::MouseEvent& e)override{edit(e,false,false);}
+  void mouseUp(const juce::MouseEvent& e)override{edit(e,false,true);handle=-1;}
+  void paint(juce::Graphics& g)override{g.fillAll(juce::Colour(0xff101b29));juce::Path line;for(int i=0;i<5;++i){float x=8+(getWidth()-16.f)*i/4,y=8+(getHeight()-16.f)*(1-points[i]);g.setColour(juce::Colour(0xff34485d));g.drawVerticalLine(int(x),0,float(getHeight()));if(i==0)line.startNewSubPath(x,y);else line.lineTo(x,y);}g.setColour(cyan);g.strokePath(line,juce::PathStrokeType(2));for(int i=0;i<5;++i)g.fillEllipse(4+(getWidth()-16.f)*i/4,4+(getHeight()-16.f)*(1-points[i]),8,8);}
+};
+class Editor final:public juce::AudioProcessorEditor,public juce::DragAndDropContainer,private juce::ListBoxModel,private juce::Timer{
   Processor& p;Theme theme;juce::Component canvas;
   juce::TextEditor search;juce::ListBox browser;juce::Label patchLabel,layerTitle,masterLabel;
   juce::Slider master;juce::ComboBox wave;juce::ToggleButton enabled{"Couche active"};
-  std::array<juce::TextButton,4> tabs;std::array<juce::Slider,8> knobs;std::array<juce::Label,8> labels;
+  std::array<juce::TextButton,4> tabs;std::array<ModSlider,8> knobs;std::array<juce::Label,8> labels;
   using SA=State::SliderAttachment;using CA=State::ComboBoxAttachment;using BA=State::ButtonAttachment;
   std::unique_ptr<SA> masterAtt;std::array<std::unique_ptr<SA>,8> att;std::unique_ptr<CA> waveAtt;std::unique_ptr<BA> enabledAtt;
   std::vector<int> visible;int selected=0,selectedOsc=0;bool oscPage=false;
   juce::TextButton oscPageButton{"OSCILLATEURS"},importButton{"Importer WAV / AIFF"};
   std::array<juce::TextButton,5> oscTabs;
   juce::ComboBox oscMode,oscWave;
-  std::array<juce::Slider,9> oscKnobs;std::array<juce::Label,9> oscLabels;
+  std::array<ModSlider,9> oscKnobs;std::array<juce::Label,9> oscLabels;
   juce::ToggleButton oscSync{"Hard Sync"},oscRing{"Ring Mod"};
   juce::Label sampleLabel;
   WavePreview preview;
   std::array<std::unique_ptr<SA>,9> oscAtt;std::unique_ptr<CA> modeAtt,oscWaveAtt;std::unique_ptr<BA> syncAtt,ringAtt;
   std::unique_ptr<juce::FileChooser> chooser;
   bool grainPage=false,filterPage=false,filterModPage=false,lfoPage=false;
+  juce::ComboBox dragSource;ModDrag dragChip;juce::Label dragStatus;CustomRouteCurve customCurve;juce::TextButton curveButton{"COURBE"};bool curvePage=false;
   bool matrixPage=false,macroPage=false;int matrixBank=0,detailRow=0;juce::TextButton macroButton{"MACROS"};juce::Label detailLabel,detailLive;juce::ComboBox detailOsc,detailCurve;juce::Slider detailSmooth;std::unique_ptr<CA> detailOscAtt,detailCurveAtt;std::unique_ptr<SA> detailSmoothAtt;
   std::array<juce::Slider,8> macroKnobs;std::array<juce::Label,8> macroLabels;std::array<std::unique_ptr<SA>,8> macroAtt;
+  void routeTo(int source,int dest,bool individual){if(dest<=0)return;int free=-1;auto patch=p.patch();for(int i=0;i<64;++i)if(!patch.matrix[i].enabled&&patch.matrix[i].source==0){free=i;break;}if(free<0){dragStatus.setText("Matrice pleine",juce::dontSendNotification);return;}auto set=[&](const char* key,float v){if(auto* par=p.state.getParameter(mid(free,key))){par->beginChangeGesture();par->setValueNotifyingHost(par->convertTo0to1(v));par->endChangeGesture();}};set("destination",float(dest));set("layer",float(selected+1));set("oscillator",individual?float(selectedOsc+1):0.f);set("amount",.25f);set("polarity",source>0&&source<=8?1.f:0.f);if(source>0){set("source",float(source));set("enabled",1);dragStatus.setText("Route "+juce::String(free+1),juce::dontSendNotification);}else{set("enabled",1);p.learnResult.store(-1);p.learnRow.store(free);dragStatus.setText("MIDI Learn…",juce::dontSendNotification);}}
+  void setupTarget(ModSlider& s,int d,bool individual=false){s.destination=d;s.individual=individual;if(d>0){s.assign=[this,d,individual](int source){routeTo(source,d,individual);};s.setTooltip("Déposer une source / clic droit : MIDI Learn CC");}}
+  void updateHalo(ModSlider& s,const cosmos::Patch& patch){if(!s.isVisible()||s.destination==0)return;float sum=0;bool assigned=false;for(int i=0;i<64;++i){const auto& m=patch.matrix[i];if(cosmos::validRoute(m)&&m.destination==s.destination&&(m.layer==0||m.layer==selected+1)&&(!s.individual||m.oscillator==0||m.oscillator==selectedOsc+1)&& (s.individual||m.oscillator==0)){assigned=true;sum+=p.matrixView[i].load(std::memory_order_relaxed);}}float q=std::clamp(sum,-1.f,1.f);auto& props=s.getProperties();if(bool(props.getWithDefault("modAssigned",false))!=assigned||std::abs(float(props.getWithDefault("modValue",0.f))-q)>.005f){props.set("modAssigned",assigned);props.set("modValue",q);s.repaint();}}
   void bindDetail(int row){detailRow=row;int i=matrixBank*8+row;detailOscAtt.reset();detailCurveAtt.reset();detailSmoothAtt.reset();detailOscAtt=std::make_unique<CA>(p.state,mid(i,"oscillator"),detailOsc);detailCurveAtt=std::make_unique<CA>(p.state,mid(i,"curve"),detailCurve);detailSmoothAtt=std::make_unique<SA>(p.state,mid(i,"smoothing"),detailSmooth);detailLabel.setText("Route "+juce::String(i+1),juce::dontSendNotification);for(int j=0;j<8;++j)matrixNumbers[j].setToggleState(j==row,juce::dontSendNotification);}juce::TextButton matrixButton{"MATRICE"};std::array<juce::TextButton,8> matrixBanks;
   std::array<juce::Label,7> matrixHeaders;std::array<RouteNumber,8> matrixNumbers;std::array<juce::ToggleButton,8> matrixEnabled;std::array<std::array<juce::ComboBox,4>,8> matrixBoxes;std::array<juce::Slider,8> matrixAmounts;
   std::array<std::unique_ptr<BA>,8> matrixEnabledAtt;std::array<std::array<std::unique_ptr<CA>,4>,8> matrixChoiceAtt;std::array<std::unique_ptr<SA>,8> matrixAmountAtt;
@@ -524,18 +554,18 @@ class Editor final:public juce::AudioProcessorEditor,private juce::ListBoxModel,
   int selectedLfo=0;juce::TextButton lfoButton{"LFO"};std::array<juce::TextButton,8> lfoTabs;
   LfoOverview lfoOverview;std::array<juce::ComboBox,6> lfoBoxes;std::array<juce::Label,6> lfoBoxLabels;std::array<juce::Slider,3> lfoKnobs;std::array<juce::Label,3> lfoLabels;std::array<std::unique_ptr<CA>,6> lfoChoiceAtt;std::array<std::unique_ptr<SA>,3> lfoSliderAtt;
   void bindLfo(int i){selectedLfo=i;for(auto& a:lfoChoiceAtt)a.reset();for(auto& a:lfoSliderAtt)a.reset();for(int j=0;j<6;++j)lfoChoiceAtt[j]=std::make_unique<CA>(p.state,lid(i,lfoKeys[j<4?j:j+3]),lfoBoxes[j]);for(int j=0;j<3;++j)lfoSliderAtt[j]=std::make_unique<SA>(p.state,lid(i,lfoKeys[j+4]),lfoKnobs[j]);for(int j=0;j<8;++j)lfoTabs[j].setToggleState(i==j,juce::dontSendNotification);}
-  void setLfoPage(bool show){macroPage=false;matrixPage=false;envPage=false;lfoPage=show;filterPage=false;filterModPage=false;setOscPage(false);if(show)bindLfo(selectedLfo);}
+  void setLfoPage(bool show){curvePage=false;macroPage=false;matrixPage=false;envPage=false;lfoPage=show;filterPage=false;filterModPage=false;setOscPage(false);if(show)bindLfo(selectedLfo);}
   juce::TextButton filterModButton{"MODULATION"};
   std::array<juce::Slider,9> filterModKnobs;std::array<juce::Label,9> filterModText;std::array<std::unique_ptr<SA>,9> filterModAtt;
   juce::ToggleButton filterAuto{"Compensation auto"};std::unique_ptr<BA> filterAutoAtt;FilterResponse filterResponse;
   juce::TextButton filterButton{"FILTRES"};juce::ComboBox filterA,filterB,filterRoute;
-  std::array<juce::Slider,8> filterKnobs;std::array<juce::Label,8> filterText;
+  std::array<ModSlider,8> filterKnobs;std::array<juce::Label,8> filterText;
   std::array<std::unique_ptr<SA>,8> filterAtt;std::array<std::unique_ptr<CA>,3> filterChoice;
   void bindFilters(){for(auto& a:filterModAtt)a.reset();for(int j=0;j<9;++j)filterModAtt[j]=std::make_unique<SA>(p.state,id(selected,filterModKeys[j]),filterModKnobs[j]);filterAutoAtt.reset();filterAutoAtt=std::make_unique<BA>(p.state,id(selected,"fAuto"),filterAuto);for(auto& a:filterAtt)a.reset();for(auto& a:filterChoice)a.reset();for(int j=0;j<8;++j)filterAtt[j]=std::make_unique<SA>(p.state,id(selected,filterKeys[j]),filterKnobs[j]);filterChoice[0]=std::make_unique<CA>(p.state,id(selected,"fModel"),filterA);filterChoice[1]=std::make_unique<CA>(p.state,id(selected,"f2Model"),filterB);filterChoice[2]=std::make_unique<CA>(p.state,id(selected,"fRoute"),filterRoute);}
   void setFilterPage(bool show){if(!show)filterModPage=false;filterPage=show;setOscPage(false);bindFilters();}
   juce::ComboBox tableBox;juce::TextButton tableImport{"Importer table WAV"};std::unique_ptr<CA> tableAtt;
   juce::TextButton grainButton{"GRAINS"};
-  std::array<juce::Slider,9> grainKnobs;
+  std::array<ModSlider,9> grainKnobs;
   std::array<juce::Label,9> grainLabels;
   std::array<juce::ToggleButton,3> grainToggles;
   juce::ComboBox grainWindowBox,grainSourceBox;
@@ -555,7 +585,7 @@ class Editor final:public juce::AudioProcessorEditor,private juce::ListBoxModel,
   void setOscPage(bool show){
     if(show)filterPage=false;oscPage=show;oscPageButton.setButtonText(show?"COUCHE":"OSCILLATEURS");
     wave.setVisible(!show&&!filterPage&&!lfoPage);enabled.setVisible(!show&&!filterPage&&!lfoPage);
-    lfoButton.setButtonText(lfoPage?"COUCHE":"LFO");bool lf=lfoPage&&!envPage&&!matrixPage,ev=lfoPage&&envPage&&!matrixPage,mx=lfoPage&&matrixPage&&!macroPage,mc=lfoPage&&matrixPage&&macroPage;macroButton.setVisible(lfoPage&&matrixPage);macroButton.setButtonText(mc?"ROUTAGES":"MACROS");detailLabel.setVisible(mx);detailOsc.setVisible(mx);detailCurve.setVisible(mx);detailSmooth.setVisible(mx);detailLive.setVisible(mx);for(int j=0;j<8;++j){macroKnobs[j].setVisible(mc);macroLabels[j].setVisible(mc);}envButton.setVisible(lfoPage&&!matrixPage);matrixButton.setVisible(lfoPage);matrixButton.setButtonText(mx?"LFO":"MATRICE");for(auto& t:matrixBanks)t.setVisible(mx);for(auto& t:matrixHeaders)t.setVisible(mx);for(int row=0;row<8;++row){matrixNumbers[row].setVisible(mx);matrixEnabled[row].setVisible(mx);matrixAmounts[row].setVisible(mx);for(auto& b:matrixBoxes[row])b.setVisible(mx);}envButton.setButtonText(ev?"LFO":"ENVELOPPES");for(auto& t:lfoTabs)t.setVisible(lf);lfoOverview.setVisible(lf);for(int j=0;j<6;++j){lfoBoxes[j].setVisible(lf);lfoBoxLabels[j].setVisible(lf);envBoxes[j].setVisible(ev);envBoxLabels[j].setVisible(ev);}for(int j=0;j<3;++j){lfoKnobs[j].setVisible(lf);lfoLabels[j].setVisible(lf);}for(auto& t:envTabs)t.setVisible(ev);envView.setVisible(ev);for(int j=0;j<9;++j){envKnobs[j].setVisible(ev);envLabels[j].setVisible(ev);}
+    lfoButton.setButtonText(lfoPage?"COUCHE":"LFO");bool lf=lfoPage&&!envPage&&!matrixPage,ev=lfoPage&&envPage&&!matrixPage,mx=lfoPage&&matrixPage&&!macroPage&&!curvePage,mc=lfoPage&&matrixPage&&macroPage,cv=lfoPage&&matrixPage&&curvePage;curveButton.setVisible(lfoPage&&matrixPage&&!macroPage);curveButton.setButtonText(cv?"RETOUR":"COURBE");customCurve.setVisible(cv);macroButton.setVisible(lfoPage&&matrixPage&&!curvePage);macroButton.setButtonText(mc?"ROUTAGES":"MACROS");detailLabel.setVisible(mx);detailOsc.setVisible(mx);detailCurve.setVisible(mx);detailSmooth.setVisible(mx);detailLive.setVisible(mx);for(int j=0;j<8;++j){macroKnobs[j].setVisible(mc);macroLabels[j].setVisible(mc);}envButton.setVisible(lfoPage&&!matrixPage);matrixButton.setVisible(lfoPage);matrixButton.setButtonText(mx?"LFO":"MATRICE");for(auto& t:matrixBanks)t.setVisible(mx);for(auto& t:matrixHeaders)t.setVisible(mx);for(int row=0;row<8;++row){matrixNumbers[row].setVisible(mx);matrixEnabled[row].setVisible(mx);matrixAmounts[row].setVisible(mx);for(auto& b:matrixBoxes[row])b.setVisible(mx);}envButton.setButtonText(ev?"LFO":"ENVELOPPES");for(auto& t:lfoTabs)t.setVisible(lf);lfoOverview.setVisible(lf);for(int j=0;j<6;++j){lfoBoxes[j].setVisible(lf);lfoBoxLabels[j].setVisible(lf);envBoxes[j].setVisible(ev);envBoxLabels[j].setVisible(ev);}for(int j=0;j<3;++j){lfoKnobs[j].setVisible(lf);lfoLabels[j].setVisible(lf);}for(auto& t:envTabs)t.setVisible(ev);envView.setVisible(ev);for(int j=0;j<9;++j){envKnobs[j].setVisible(ev);envLabels[j].setVisible(ev);}
     filterButton.setVisible(!show&&!lfoPage);filterButton.setButtonText(filterPage?"COUCHE":"FILTRES");oscPageButton.setVisible(!filterPage&&!lfoPage);
     bool mainFilter=filterPage&&!filterModPage,modFilter=filterPage&&filterModPage;filterModButton.setVisible(filterPage);filterModButton.setButtonText(modFilter?"RÉPONSE":"MODULATION");filterAuto.setVisible(modFilter);filterResponse.setVisible(mainFilter);filterA.setVisible(mainFilter);filterB.setVisible(mainFilter);filterRoute.setVisible(mainFilter);for(int j=0;j<8;++j){filterKnobs[j].setVisible(mainFilter);filterText[j].setVisible(mainFilter);}for(int j=0;j<9;++j){filterModKnobs[j].setVisible(modFilter);filterModText[j].setVisible(modFilter);}
     for(int j=0;j<8;++j){knobs[j].setVisible(!show&&!filterPage&&!lfoPage);labels[j].setVisible(!show&&!filterPage&&!lfoPage);}
@@ -617,9 +647,12 @@ class Editor final:public juce::AudioProcessorEditor,private juce::ListBoxModel,
   void selectedRowsChanged(int row)override{if(row>=0&&row<int(visible.size()))p.setCurrentProgram(visible[size_t(row)]);}
   void timerCallback()override{
     patchLabel.setText(p.getProgramName(p.getCurrentProgram()),juce::dontSendNotification);
-    if(int learned=p.learnResult.exchange(-1);learned>=0){int i=learned/128;if(auto* par=p.state.getParameter(mid(i,"source"))){par->beginChangeGesture();par->setValueNotifyingHost(par->convertTo0to1(float(27+learned%128)));par->endChangeGesture();}}
+    if(int learned=p.learnResult.exchange(-1);learned>=0){int i=learned/128;if(auto* par=p.state.getParameter(mid(i,"source"))){par->beginChangeGesture();par->setValueNotifyingHost(par->convertTo0to1(float(27+learned%128)));par->endChangeGesture();dragStatus.setText("CC "+juce::String(learned%128)+" → route "+juce::String(i+1),juce::dontSendNotification);}}
     if(lfoPage&&matrixPage&&!macroPage){int i=matrixBank*8+detailRow;detailLive.setText(p.learnRow.load()==i?juce::String("MIDI Learn…"):juce::String("Mod. ")+juce::String(p.matrixView[i].load()*100,1)+" %",juce::dontSendNotification);}
-    if(lfoPage&&!matrixPage){if(envPage)envView.update(p.patch().modEnv[selectedEnv]);else lfoOverview.update(p.patch().lfo,selectedLfo);}
+    auto viewPatch=p.patch();for(auto& s:knobs)updateHalo(s,viewPatch);for(auto& s:filterKnobs)updateHalo(s,viewPatch);for(auto& s:oscKnobs)updateHalo(s,viewPatch);for(auto& s:grainKnobs)updateHalo(s,viewPatch);
+    if(curvePage&&lfoPage&&matrixPage)customCurve.update(viewPatch.matrix[matrixBank*8+detailRow].points);
+    if(macroPage&&lfoPage&&matrixPage)for(int j=0;j<8;++j)if(!macroLabels[j].isBeingEdited()){auto name=p.state.state.getProperty(juce::Identifier(macroId(j)+"Name"),"MACRO "+juce::String(j+1)).toString();macroLabels[j].setText(name,juce::dontSendNotification);}
+    if(lfoPage&&!matrixPage){if(envPage)envView.update(viewPatch.modEnv[selectedEnv]);else{std::array<float,8> phases;for(int j=0;j<8;++j)phases[j]=p.lfoPhaseView[j].load(std::memory_order_relaxed);lfoOverview.update(viewPatch.lfo,selectedLfo,phases);}}
     if(filterPage&&!filterModPage){auto layer=p.patch().layer[selected];filterResponse.update(layer.filter1,layer.filter2,p.getSampleRate()>0?p.getSampleRate():48000.);}
     if(oscPage){if(!grainPage){const bool table=oscMode.getSelectedId()==2;tableBox.setVisible(table);tableImport.setVisible(table);}auto patch=p.patch();auto& l=patch.layer[selected];auto o=l.osc[selectedOsc];auto* s=l.sample;
       if(o.mode==cosmos::OscMode::granular&&o.grain.source)s=&cosmos::factoryGrains()[size_t(o.grain.source-1)];
@@ -676,22 +709,25 @@ public:
     for(int j=0;j<6;++j){envBoxes[j].addItemList(*envLists[j],1);add(envBoxes[j]);label(envBoxLabels[j],juce::String::fromUTF8(envBoxNames[j]),13);}
     for(int j=0;j<9;++j){configure(envKnobs[j]);label(envLabels[j],juce::String::fromUTF8(envKnobNames[j]),13);}
     add(envView);envView.onEdit=[this](int which,float v,bool begin,bool end){if(auto* par=p.state.getParameter(eid(selectedEnv,which?"segmentLevel":"sustain"))){if(begin)par->beginChangeGesture();par->setValueNotifyingHost(par->convertTo0to1(v));if(end)par->endChangeGesture();}};
-    matrixButton.onClick=[this]{macroPage=false;matrixPage=!matrixPage;envPage=false;setOscPage(false);if(matrixPage)bindMatrix(matrixBank);else bindLfo(selectedLfo);};add(matrixButton);
+    matrixButton.onClick=[this]{curvePage=false;macroPage=false;matrixPage=!matrixPage;envPage=false;setOscPage(false);if(matrixPage)bindMatrix(matrixBank);else bindLfo(selectedLfo);};add(matrixButton);
     const char* headers[]={"N°","Actif","Source","Destination","Couche","Polarité","Profondeur"};
     for(int j=0;j<7;++j)label(matrixHeaders[j],juce::String::fromUTF8(headers[j]),13);
     const juce::StringArray polarity{"Unipolaire","Bipolaire"};const juce::StringArray* matrixLists[]={&matrixSources,&matrixDests,&lfoLayers,&polarity};
     for(int row=0;row<8;++row){matrixBanks[row].setButtonText(juce::String(row*8+1)+"–"+juce::String(row*8+8));matrixBanks[row].onClick=[this,row]{bindMatrix(row);};add(matrixBanks[row]);add(matrixNumbers[row]);matrixNumbers[row].onClick=[this,row]{bindDetail(row);};matrixNumbers[row].onLearn=[this,row]{bindDetail(row);p.learnResult.store(-1);p.learnRow.store(matrixBank*8+row);detailLive.setText("MIDI Learn…",juce::dontSendNotification);};matrixNumbers[row].setTooltip("Clic : détails / clic droit : MIDI Learn CC");add(matrixEnabled[row]);for(int j=0;j<4;++j){matrixBoxes[row][j].addItemList(*matrixLists[j],1);add(matrixBoxes[row][j]);}matrixAmounts[row].setSliderStyle(juce::Slider::LinearHorizontal);matrixAmounts[row].setTextBoxStyle(juce::Slider::TextBoxRight,false,48,24);add(matrixAmounts[row]);}
-    macroButton.onClick=[this]{macroPage=!macroPage;setOscPage(false);if(!macroPage)bindMatrix(matrixBank);};add(macroButton);
-    for(int j=0;j<8;++j){configure(macroKnobs[j]);label(macroLabels[j],"MACRO "+juce::String(j+1),15);macroAtt[j]=std::make_unique<SA>(p.state,macroId(j),macroKnobs[j]);}
+    macroButton.onClick=[this]{curvePage=false;macroPage=!macroPage;setOscPage(false);if(!macroPage)bindMatrix(matrixBank);};add(macroButton);
+    for(int j=0;j<8;++j){configure(macroKnobs[j]);label(macroLabels[j],"MACRO "+juce::String(j+1),15);macroAtt[j]=std::make_unique<SA>(p.state,macroId(j),macroKnobs[j]);macroLabels[j].setEditable(false,true,false);macroLabels[j].onTextChange=[this,j]{auto name=macroLabels[j].getText().trim().substring(0,24);p.state.state.setProperty(juce::Identifier(macroId(j)+"Name"),name,nullptr);};}
     label(detailLabel,"Route",13);label(detailLive,"",12);detailOsc.addItemList(matrixOscs,1);detailOsc.setTooltip("Oscillateur cible (destinations oscillateurs uniquement)");add(detailOsc);detailCurve.addItemList(matrixCurves,1);detailCurve.setTooltip("Courbe de transformation");add(detailCurve);detailSmooth.setSliderStyle(juce::Slider::LinearHorizontal);detailSmooth.setTextBoxStyle(juce::Slider::TextBoxRight,false,55,24);detailSmooth.setTextValueSuffix(" ms");detailSmooth.setTooltip("Lissage MIDI");add(detailSmooth);
+    dragSource.addItemList(matrixSources,1);dragSource.setSelectedId(2,juce::dontSendNotification);add(dragSource);dragChip.setButtonText("GLISSER");dragChip.source=[this]{return dragSource.getSelectedId()-1;};dragChip.setTooltip("Glisser la source sur un potentiomètre compatible");add(dragChip);label(dragStatus,"",11);
+    setupTarget(knobs[0],3);setupTarget(knobs[1],4);setupTarget(knobs[2],5);setupTarget(knobs[3],1);setupTarget(filterKnobs[0],1);setupTarget(filterKnobs[1],11);setupTarget(filterKnobs[3],2);setupTarget(filterKnobs[4],12);setupTarget(oscKnobs[1],5,true);setupTarget(oscKnobs[5],6,true);setupTarget(oscKnobs[6],10,true);setupTarget(oscKnobs[7],9,true);setupTarget(grainKnobs[1],8,true);setupTarget(grainKnobs[2],7,true);
+    curveButton.onClick=[this]{curvePage=!curvePage;setOscPage(false);};add(curveButton);add(customCurve);customCurve.onEdit=[this](int j,float v,bool begin,bool end){int i=matrixBank*8+detailRow;if(auto* par=p.state.getParameter(mid(i,matrixKeys[9+j]))){if(begin)par->beginChangeGesture();par->setValueNotifyingHost(par->convertTo0to1(v));if(end)par->endChangeGesture();}};
     selectLayer(0);setOscPage(false);timerCallback();startTimerHz(20);
     setResizable(true,true);setResizeLimits(900,570,1800,1140);if(auto* c=getConstrainer())c->setFixedAspectRatio(1200./760.);setSize(1200,760);
   }
   #ifdef COSMOS_PRESET_QA
   bool qualifyLayout(const juce::File& folder){
     bool ok=true;
-    for(int width:{900,1200,1800})for(int page=0;page<9;++page){
-      setSize(width,int(width*760./1200.));grainPage=page==2;filterPage=false;lfoPage=false;matrixPage=false;setOscPage(page==1||page==2);if(page==3||page==4){filterModPage=page==4;setFilterPage(true);}if(page>=5){setLfoPage(true);if(page==6){envPage=true;setOscPage(false);bindEnvelope(0);}if(page>=7){matrixPage=true;macroPage=page==8;setOscPage(false);bindMatrix(7);}}timerCallback();
+    for(int width:{900,1200,1800})for(int page=0;page<10;++page){
+      setSize(width,int(width*760./1200.));grainPage=page==2;filterPage=false;lfoPage=false;matrixPage=false;setOscPage(page==1||page==2);if(page==3||page==4){filterModPage=page==4;setFilterPage(true);}if(page>=5){setLfoPage(true);if(page==6){envPage=true;setOscPage(false);bindEnvelope(0);}if(page>=7){matrixPage=true;macroPage=page==8;curvePage=page==9;setOscPage(false);bindMatrix(7);}}timerCallback();
       for(int i=0;i<canvas.getNumChildComponents();++i){auto* a=canvas.getChildComponent(i);if(!a->isVisible())continue;
         ok&=canvas.getLocalBounds().contains(a->getBounds());
         for(int j=i+1;j<canvas.getNumChildComponents();++j){auto* b=canvas.getChildComponent(j);if(b->isVisible()&&a->getBounds().intersects(b->getBounds())){ok=false;juce::Logger::writeToLog("Layout overlap: "+a->getName()+" / "+b->getName());}}
@@ -716,14 +752,14 @@ public:
     g.setColour(cyan);g.setFont(17);g.drawText("BIBLIOTHÈQUE  /  270",25,162,242,28,juce::Justification::centred);
     g.setColour(juce::Colour(0xff35495e));if(!oscPage&&!filterPage&&!lfoPage)for(int j=0;j<8;++j)g.drawRoundedRectangle(310.f+216.f*(j%4),316.f+180.f*(j/4),204.f,168.f,6.f,1.f);
     if(oscPage)for(int j=0;j<10;++j)g.drawRoundedRectangle(310.f+172.f*(j%5),449.f+132.f*(j/5),164.f,126.f,6.f,1.f);
-    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.5.4  COSMOS INTELLIGENT MODULATION  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
+    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.5.5  COSMOS VISUAL MODULATION DESIGNER  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
   }
   void resized()override{
     canvas.setTransform(juce::AffineTransform::scale(float(getWidth())/1200.f));canvas.setBounds(0,0,1200,760);
-    search.setBounds(26,199,242,30);browser.setBounds(26,239,242,478);patchLabel.setBounds(290,101,730,32);
+    search.setBounds(26,199,242,30);browser.setBounds(26,239,242,478);patchLabel.setBounds(290,101,460,32);dragSource.setBounds(755,101,160,30);dragChip.setBounds(920,101,100,30);dragStatus.setBounds(755,78,265,20);
     masterLabel.setBounds(1040,8,140,20);master.setBounds(1045,30,130,102);
     for(int k=0;k<4;++k)tabs[k].setBounds(292+225*k,151,219,52);
-    layerTitle.setBounds(312,227,280,32);lfoButton.setBounds(600,230,150,30);envButton.setBounds(760,230,175,30);matrixButton.setBounds(945,230,220,30);macroButton.setBounds(760,230,175,30);
+    layerTitle.setBounds(312,227,280,32);lfoButton.setBounds(600,230,150,30);envButton.setBounds(760,230,175,30);matrixButton.setBounds(945,230,220,30);macroButton.setBounds(760,230,85,30);curveButton.setBounds(850,230,85,30);customCurve.setBounds(310,310,855,390);
     detailLabel.setBounds(310,699,90,25);detailOsc.setBounds(403,699,130,25);detailCurve.setBounds(537,699,150,25);detailSmooth.setBounds(692,699,295,25);detailLive.setBounds(992,699,173,25);
     for(int j=0;j<8;++j){int x=310+216*(j%4),y=300+200*(j/4);macroLabels[j].setBounds(x,y,200,24);macroKnobs[j].setBounds(x+22,y+27,160,145);}
     for(int j=0;j<8;++j)matrixBanks[j].setBounds(310+107*j,270,102,30);
