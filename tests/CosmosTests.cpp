@@ -428,5 +428,11 @@ int main(){
   wet.nexus.macroX=8;wet.macros[7]=.75f;wet.nexus.ccY=74;b->controller(0,74,127);wet.matrix[0]={true,163,3,1,0,.1f};wet.matrix[1]={true,164,3,1,0,.1f};std::array<float,128> l{},r{};b->render(l.data(),r.data(),128,wet);auto v=b->matrixValues();check(std::abs(v[0]-.075f)<1e-6f&&std::abs(v[1]-.1f)<1e-6f,"NEXUS macro MIDI matrix sources");
   wet.nexus.smooth=100;wet.nexus.macroX=0;wet.nexus.x=0;b->render(l.data(),r.data(),128,wet);check(b->nexusPosition()[0]>.7f&&b->nexusPosition()[0]<.75f,"NEXUS smooth transition");
  }
+ {
+ cosmos::Patch p;p.layer[0].cutoff=100;p.layer[1].cutoff=10000;p.layer[0].tune=-12;p.layer[1].tune=12;p.morph.enabled=true;
+ auto z=p;cosmos::applyMorph(z,.5f,1);check(std::abs(z.layer[0].cutoff-1000)<.01f,"morph logarithmic cutoff");check(z.layer[0].tune==-12,"morph protected tuning");check(p.layer[0].cutoff==100,"morph original intact");
+ z=p;z.morph.family[3]=false;cosmos::applyMorph(z,1,1);check(z.layer[0].cutoff==100,"morph filter family lock");z=p;z.morph.amount=0;cosmos::applyMorph(z,1,1);check(z.layer[0].cutoff==100,"morph zero amount");z=p;z.morph.protectTune=false;cosmos::applyMorph(z,1,1);check(z.layer[0].tune==12,"morph corner tuning");
+ auto a=std::make_unique<cosmos::Engine>();a->prepare(48000);p.nexus.enabled=true;p.nexus.x=.5f;p.nexus.y=1;a->noteOn(0,60,.8f);std::array<float,128> l{},r{};a->render(l.data(),r.data(),128,p);for(auto v:l)check(std::isfinite(v),"morph render finite");
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }
