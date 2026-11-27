@@ -263,5 +263,17 @@ int main(){
     check(energy>1e-6,"analog filter signal");
   }
  }
+ {
+  for(int model:{26,27,28,29}){
+    cosmos::FilterState st;cosmos::FilterPlan p({model,1000,.5f,0},48000);
+    float echo=0;for(int j=0;j<=48;++j){float y=st.tick(j==0?1.f:0.f,p);if(j==48)echo=y;}
+    check(model%2?echo<-.1f:echo>.1f,"comb polarity and delay");
+  }
+  for(int model:{35,36})for(double hz:{100.,1000.,8000.}){
+    cosmos::FilterState st;cosmos::FilterPlan p({model,1200,.4f,0},48000);double in=0,out=0;
+    for(int j=0;j<12000;++j){float x=float(std::sin(2*cosmos::pi*hz*j/48000));float y=st.tick(x,p);if(j>=6000){in+=x*x;out+=y*y;}}
+    check(std::abs(out/in-1)<.01,"allpass unity magnitude");
+  }
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }

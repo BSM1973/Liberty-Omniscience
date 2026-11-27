@@ -11,7 +11,7 @@ using ID=juce::ParameterID;
 using F=juce::AudioParameterFloat;
 using B=juce::AudioParameterBool;
 using C=juce::AudioParameterChoice;
-const juce::StringArray filterNames={"Historique","Bypass","Passe-bas 6","Passe-haut 6","Passe-bas 12","Passe-haut 12","Passe-bande 12","Coupe-bande 12","Passe-bas 24","Passe-haut 24","Passe-bande cascade","Coupe-bande cascade","Passe-bas 36","Passe-haut 36","Passe-bas 48","Passe-haut 48","Passe-bas 18","Passe-haut 18","Ladder 24","Transistor Ladder 24","Diode Ladder 24","OTA 12","OTA 24","Analogique 12","Analogique HP 24","Analogique HP 12"};
+const juce::StringArray filterNames={"Historique","Bypass","Passe-bas 6","Passe-haut 6","Passe-bas 12","Passe-haut 12","Passe-bande 12","Coupe-bande 12","Passe-bas 24","Passe-haut 24","Passe-bande cascade","Coupe-bande cascade","Passe-bas 36","Passe-haut 36","Passe-bas 48","Passe-haut 48","Passe-bas 18","Passe-haut 18","Ladder 24","Transistor Ladder 24","Diode Ladder 24","OTA 12","OTA 24","Analogique 12","Analogique HP 24","Analogique HP 12","Comb rétroaction +","Comb rétroaction −","Comb direct +","Comb direct −","Formant A","Formant E","Formant I","Formant O","Formant U","All-Pass 2 pôles","All-Pass cascade","Cloche boost","Cloche cut","Shelf grave","Shelf aigu","Triple résonance"};
 const std::array<const char*,8> filterKeys={"cutoff","fRes","fDrive","f2Cutoff","f2Res","f2Drive","fMix","fTrim"};
 const std::array<const char*,8> filterLabels={"Fréquence 1","Résonance 1","Saturation 1","Fréquence 2","Résonance 2","Saturation 2","Balance parallèle","Niveau"};
 const std::array<const char*,8> keys={"gain","pan","tune","cutoff","attack","decay","sustain","release"};
@@ -212,11 +212,11 @@ public:
     }
     midi.clear();
   }
-  int getNumPrograms()override{return 224;} int getCurrentProgram()override{return juce::jmax(0,program.load());}
-  const juce::String getProgramName(int i)override{return presetName(juce::jlimit(0,223,i));}
+  int getNumPrograms()override{return 240;} int getCurrentProgram()override{return juce::jmax(0,program.load());}
+  const juce::String getProgramName(int i)override{return presetName(juce::jlimit(0,239,i));}
   void changeProgramName(int,const juce::String&)override{}
   void setCurrentProgram(int i)override{
-    if(i<0||i>=224)return;
+    if(i<0||i>=240)return;
     resetOscillators();
     auto set=[&](const juce::String& key,float v){if(auto* p=state.getParameter(key))p->setValueNotifyingHost(p->convertTo0to1(v));};
     int cat=(i%100)/10,var=i%10;
@@ -249,7 +249,7 @@ public:
       }
       set(oid(0,1,"level"),.12f);set(oid(0,1,"mode"),1);set(oid(0,1,"morph"),var/9.f);
     }
-    if(i>=200){for(int k=0;k<4;++k){set(id(k,"enabled"),k==0);set(id(k,"wave"),1);set(id(k,"fModel"),i-198);set(id(k,"cutoff"),1200);set(id(k,"fRes"),i>=216?.72f:.25f);if(i>=216){set(id(k,"fDrive"),.28f);set(id(k,"fAuto"),1);}}}
+    if(i>=200){for(int k=0;k<4;++k){set(id(k,"enabled"),k==0);set(id(k,"wave"),1);set(id(k,"fModel"),i-198);set(id(k,"cutoff"),1200);set(id(k,"fRes"),i>=216?.72f:.25f);if(i>=216&&i<224){set(id(k,"fDrive"),.28f);set(id(k,"fAuto"),1);}if(i>=224){set(id(k,"cutoff"),i<228?330.f:1200.f);set(id(k,"fRes"),.55f);set(id(k,"fDrive"),0);set(id(k,"gain"),k==0?.24f:.1f);}}}
     program.store(i);
   }
   void getStateInformation(juce::MemoryBlock& dest)override{
@@ -265,7 +265,7 @@ public:
         for(auto key:grainKeys)reset(key);for(auto key:grainFlags)reset(key);reset("gWindow");reset("gSource");
       }
       if(int(t.getProperty("schema",1))<4)for(int k=0;k<4;++k)for(int o=0;o<5;++o)if(auto* par=state.getParameter(oid(k,o,"tableSource")))par->setValueNotifyingHost(0.f);
-      program.store(juce::jlimit(0,223,int(t.getProperty("program",0))));state.replaceState(t);
+      program.store(juce::jlimit(0,239,int(t.getProperty("program",0))));state.replaceState(t);
       if(int(t.getProperty("schema",1))<6)for(int k=0;k<4;++k)if(auto* par=state.getParameter(id(k,"fAuto")))par->setValueNotifyingHost(0.f);
       if(int(t.getProperty("schema",1))<5)for(int k=0;k<4;++k){const char* fk[]={"fModel","f2Model","fRoute","fRes","fDrive","f2Cutoff","f2Res","f2Drive","fMix","fTrim"};for(auto key:fk)if(auto* par=state.getParameter(id(k,key)))par->setValueNotifyingHost(par->getDefaultValue());}
       for(int k=0;k<4;++k){
@@ -340,7 +340,13 @@ public:
 class FilterResponse final:public juce::Component{
     std::array<std::array<float,96>,2> curves{};
     std::array<cosmos::FilterParams,2> prior{};double rate=0;
+    int dragging=-1;
+    float frequencyAt(int x)const{double q=std::clamp((x-12.)/std::max(1.,getWidth()-24.),0.,1.);return float(20*std::pow(std::min(20000.,std::max(8000.,rate)*.45)/20.,q));}
 public:
+    std::function<void(int,float,bool,bool)> onCutoff;
+    void mouseDown(const juce::MouseEvent& e)override{dragging=e.mods.isShiftDown()?1:0;if(onCutoff)onCutoff(dragging,frequencyAt(e.x),true,false);}
+    void mouseDrag(const juce::MouseEvent& e)override{if(dragging>=0&&onCutoff)onCutoff(dragging,frequencyAt(e.x),false,false);}
+    void mouseUp(const juce::MouseEvent& e)override{if(dragging>=0&&onCutoff)onCutoff(dragging,frequencyAt(e.x),false,true);dragging=-1;}
     void update(cosmos::FilterParams a,cosmos::FilterParams b,double sr){
       sr=std::max(8000.,sr);std::array<cosmos::FilterParams,2> next{a,b};
       auto same=[](auto x,auto y){return x.model==y.model&&x.cutoff==y.cutoff&&x.resonance==y.resonance&&x.drive==y.drive&&x.autoGain==y.autoGain;};
@@ -362,7 +368,7 @@ public:
     }
     void paint(juce::Graphics& g)override{
       g.fillAll(juce::Colour(0xff0b131e));g.setColour(juce::Colour(0xff40566f));g.drawRect(getLocalBounds());
-      g.setFont(11);g.setColour(light);g.drawText("Réponse impulsionnelle (petit signal)   A / B",12,2,getWidth()-24,17,juce::Justification::centredLeft);
+      g.setFont(11);g.setColour(light);g.drawText("Réponse (petit signal) — glisser : A / Maj + glisser : B",12,2,getWidth()-24,17,juce::Justification::centredLeft);
       auto bounds=getLocalBounds().toFloat().reduced(12);bounds.removeFromTop(14);bounds.removeFromBottom(5);
       auto y=[&](float db){return bounds.getY()+(24-db)/84*bounds.getHeight();};
       for(int db:{0,-12,-24,-36,-48,-60}){g.setColour(juce::Colour(0xff2d4053));g.drawHorizontalLine(int(y(float(db))),bounds.getX(),bounds.getRight());}
@@ -470,7 +476,7 @@ class Editor final:public juce::AudioProcessorEditor,private juce::ListBoxModel,
   void add(juce::Component& c){canvas.addAndMakeVisible(c);}
   void label(juce::Label& l,juce::String text,float size){l.setText(text,juce::dontSendNotification);l.setFont(juce::Font(juce::FontOptions(size)));l.setColour(juce::Label::textColourId,light);l.setJustificationType(juce::Justification::centred);add(l);}
   void configure(juce::Slider& s){s.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);s.setTextBoxStyle(juce::Slider::TextBoxBelow,false,85,22);add(s);}
-  void filter(){visible.clear();auto q=search.getText();for(int i=0;i<224;++i)if(presetName(i).containsIgnoreCase(q))visible.push_back(i);browser.deselectAllRows();browser.updateContent();}
+  void filter(){visible.clear();auto q=search.getText();for(int i=0;i<240;++i)if(presetName(i).containsIgnoreCase(q))visible.push_back(i);browser.deselectAllRows();browser.updateContent();}
   int getNumRows()override{return int(visible.size());}
   void paintListBoxItem(int row,juce::Graphics& g,int w,int h,bool sel)override{if(row<0||row>=int(visible.size()))return;g.fillAll(sel?juce::Colour(0xff294b67):(row%2?ink:juce::Colour(0xff17202d)));g.setColour(light);g.setFont(14);g.drawText(presetName(visible[size_t(row)]),8,0,w-12,h,juce::Justification::centredLeft,true);}
   void selectedRowsChanged(int row)override{if(row>=0&&row<int(visible.size()))p.setCurrentProgram(visible[size_t(row)]);}
@@ -519,7 +525,7 @@ public:
     for(int j=0;j<3;++j){grainToggles[j].setButtonText(flagNames[j]);add(grainToggles[j]);}
     grainWindowBox.addItemList({"Hann","Triangle","Trapèze"},1);add(grainWindowBox);
     grainSourceBox.addItemList({"Sample personnel","Cosmic Analog","Metal Resonance","Nebula Noise","Crystal Bell"},1);add(grainSourceBox);
-    filterA.addItemList(filterNames,1);filterB.addItemList(filterNames,1);filterRoute.addItemList({"Série","Parallèle"},1);add(filterA);add(filterB);add(filterRoute);add(filterAuto);add(filterResponse);for(int j=0;j<8;++j){configure(filterKnobs[j]);label(filterText[j],juce::String::fromUTF8(filterLabels[j]),14);}
+    filterA.addItemList(filterNames,1);filterB.addItemList(filterNames,1);filterRoute.addItemList({"Série","Parallèle"},1);add(filterA);add(filterB);add(filterRoute);add(filterAuto);add(filterResponse);filterResponse.onCutoff=[this](int which,float hz,bool begin,bool end){if(auto* par=p.state.getParameter(id(selected,which==0?"cutoff":"f2Cutoff"))){if(begin)par->beginChangeGesture();par->setValueNotifyingHost(par->convertTo0to1(juce::jlimit(20.f,20000.f,hz)));if(end)par->endChangeGesture();}};for(int j=0;j<8;++j){configure(filterKnobs[j]);label(filterText[j],juce::String::fromUTF8(filterLabels[j]),14);}
     filterButton.onClick=[this]{setFilterPage(!filterPage);};add(filterButton);
     selectLayer(0);setOscPage(false);timerCallback();startTimerHz(20);
     setResizable(true,true);setResizeLimits(900,570,1800,1140);if(auto* c=getConstrainer())c->setFixedAspectRatio(1200./760.);setSize(1200,760);
@@ -550,10 +556,10 @@ public:
     g.setGradientFill(juce::ColourGradient(juce::Colour(0xff202b3c),292,216,juce::Colour(0xff141c28),292,730,false));g.fillRoundedRectangle(292,216,894,514,8);
     g.setColour(juce::Colour(0xff40566f));g.drawRoundedRectangle(14,150,266,580,8,1);g.drawRoundedRectangle(292,216,894,514,8,1);
     g.setColour(cyan.withAlpha(.65f));g.fillRect(303,218,870,2);
-    g.setColour(cyan);g.setFont(17);g.drawText("BIBLIOTHÈQUE  /  224",25,162,242,28,juce::Justification::centred);
+    g.setColour(cyan);g.setFont(17);g.drawText("BIBLIOTHÈQUE  /  240",25,162,242,28,juce::Justification::centred);
     g.setColour(juce::Colour(0xff35495e));if(!oscPage&&!filterPage)for(int j=0;j<8;++j)g.drawRoundedRectangle(310.f+216.f*(j%4),316.f+180.f*(j/4),204.f,168.f,6.f,1.f);
     if(oscPage)for(int j=0;j<10;++j)g.drawRoundedRectangle(310.f+172.f*(j%5),449.f+132.f*(j/5),164.f,126.f,6.f,1.f);
-    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.4.1  ANALOG FILTER LEGENDS  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
+    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.4.2  SPECTRAL FILTER UNIVERSE  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
   }
   void resized()override{
     canvas.setTransform(juce::AffineTransform::scale(float(getWidth())/1200.f));canvas.setBounds(0,0,1200,760);
