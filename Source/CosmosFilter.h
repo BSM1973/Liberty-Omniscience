@@ -3,17 +3,28 @@
 #include <algorithm>
 #include <cmath>
 namespace cosmos {
-constexpr int filterModelCount=18;
-struct FilterParams {int model=0;float cutoff=8000,resonance=0,drive=0;};
+constexpr int filterModelCount=26;
+struct FilterParams {int model=0;float cutoff=8000,resonance=0,drive=0;bool autoGain=false;};
 struct FilterPlan {
     int model=0,sections=0,kind=0;bool onePole=false;
     float g=0,a1=1,a2=0,a3=0,k=1.41421356f,b1=1,b2=0,b3=0,drive=0,driveNorm=1,legacyAlpha=0;
+    int analogPoles=0;float analogStep=0,feedback=0,analogDrive=1,compensation=1;bool analog=false;
     FilterPlan()=default;
     FilterPlan(FilterParams p,double sr){
       model=std::clamp(p.model,0,filterModelCount-1);
       double hz=std::clamp(double(p.cutoff),20.,sr*.45);
       legacyAlpha=float(1-std::exp(-6.283185307179586*hz/sr));
       if(model<2)return;
+      if(model>=18){
+        analog=true;analogPoles=(model==21||model==23||model==25)?2:4;
+        // Two internal substeps, with bounded nonlinear feedback and state.
+        analogStep=float(1-std::exp(-6.283185307179586*hz/(sr*2.)));
+        float res=std::clamp(p.resonance,0.f,1.f);
+        feedback=(analogPoles==4?4.6f:1.85f)*res;
+        analogDrive=1+5*std::clamp(p.drive,0.f,1.f);
+        compensation=p.autoGain?std::min(2.5f,1+feedback*.45f):1;
+        return;
+      }
       g=float(std::tan(3.141592653589793*hz/sr));
       const int m=model;
       onePole=m==2||m==3||m==16||m==17;
@@ -27,11 +38,31 @@ struct FilterPlan {
     }
 };
 struct FilterState {
-    std::array<float,4> s1{},s2{};float pole=0,legacy=0;int prior=-1;
+    std::array<float,4> s1{},s2{};float pole=0,legacy=0;std::array<float,4> analogState{};int prior=-1;
     float tick(float x,const FilterPlan& p)noexcept{
-      if(prior!=p.model){s1={};s2={};pole=legacy=0;prior=p.model;}
+      if(prior!=p.model){s1={};s2={};analogState={};pole=legacy=0;prior=p.model;}
       if(p.model==1)return x;
       if(p.model==0){legacy+=p.legacyAlpha*(x-legacy);return legacy;}
+      if(p.analog){
+        // Original analog-inspired models, not component-level circuit emulations.
+        auto shape=[&](float u){
+          if(p.model==20)return u/(1+std::abs(u)); // diode-inspired soft current limiting
+          if(p.model==21||p.model==22)return std::clamp(u,-1.f,1.f); // OTA-inspired limiting
+          if(p.model==19)return std::tanh(u*1.4f)/1.4f;
+          return std::tanh(u);
+        };
+        for(int sub=0;sub<2;++sub){
+          float u=shape(x*p.analogDrive-p.feedback*analogState[p.analogPoles-1]);
+          for(int i=0;i<p.analogPoles;++i){
+            float delta=shape(u)-shape(analogState[i]);
+            analogState[i]=std::clamp(analogState[i]+p.analogStep*delta,-4.f,4.f);
+            u=analogState[i];
+          }
+        }
+        float y=analogState[p.analogPoles-1];
+        if(p.model==24||p.model==25)y=x-analogState[0]*2+analogState[1];
+        return std::isfinite(y)?y*p.compensation:0.f;
+      }
       if(p.drive>0)x=std::tanh(x*p.drive)*p.driveNorm;
       if(p.onePole){float v=(x-pole)*p.g/(1+p.g),low=v+pole;pole=low+v;x=p.kind==1?x-low:low;}
       for(int i=0;i<p.sections;++i){

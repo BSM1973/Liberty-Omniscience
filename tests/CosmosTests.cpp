@@ -252,5 +252,16 @@ int main(){
     check(model%2==0?a>b:b>a,"filter frequency discrimination");
   }
  }
+ {
+  for(double sr:{44100.,48000.,96000.})for(int model=18;model<cosmos::filterModelCount;++model){
+    cosmos::FilterState st;double energy=0;
+    for(int i=0;i<16000;++i){
+      cosmos::FilterPlan p({model,i<8000?900.f:18000.f,1.f,.8f,true},sr);
+      float y=st.tick(i<4000?float(.8*std::sin(2*cosmos::pi*330*i/sr)):0.f,p);
+      check(std::isfinite(y)&&std::abs(y)<30.f,"analog filter bounded under resonance and cutoff jump");energy+=double(y)*y;
+    }
+    check(energy>1e-6,"analog filter signal");
+  }
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }
