@@ -332,5 +332,19 @@ int main(){
   for(int block=0;block<50;++block){std::array<float,128> l{},r{},ll{},rr{},sl{},sr{};dry.render(l.data(),r.data(),128,a);wet.render(ll.data(),rr.data(),128,b);split.render(sl.data(),sr.data(),19,b);split.render(sl.data()+19,sr.data()+19,109,b);for(int j=0;j<128;++j){diff+=std::abs(ll[j]-l[j]);check(std::abs(ll[j]-sl[j])<1e-6f&&std::abs(rr[j]-sr[j])<1e-6f,"amplitude LFO independent of render partition");}}
   check(diff>.01,"LFO actual modulation");
  }
+ {
+  cosmos::LfoParams p;p.depth=1;
+  for(int shape=0;shape<12;++shape)for(int j=0;j<2048;++j){p.shape=shape;p.polarity=0;auto a=cosmos::lfoAt(p,j/512.-2);p.polarity=1;auto b=cosmos::lfoAt(p,j/512.-2);check(std::isfinite(a)&&std::abs(a)<=1.00001f&&b>=0&&b<=1.00001f&&std::abs(b-(.5f+.5f*a))<1e-6f,"advanced waveform and polarity");}
+  p.shape=9;p.polarity=0;check(std::abs(cosmos::lfoAt(p,.999999)-cosmos::lfoAt(p,1.000001))<1e-5f,"progressive random continuity");
+  for(int target:{3,5,6,7,8}){
+    auto a=std::make_unique<cosmos::Engine>(),b=std::make_unique<cosmos::Engine>();a->prepare(48000);b->prepare(48000);
+    cosmos::Patch dry;for(int k=1;k<4;++k)dry.layer[k].enabled=false;auto& o=dry.layer[0].osc[0];if(target==6){o.mode=cosmos::OscMode::wavetable;o.morph=.5f;}if(target>=7){o.mode=cosmos::OscMode::granular;o.grain.source=1;o.grain.density=20;o.grain.position=.5f;}
+    auto wet=dry;wet.lfo[0].destination=target;wet.lfo[0].depth=.8f;wet.lfo[0].rate=4;wet.lfo[0].mode=1;
+    std::array<float,128> z{},zz{};b->render(z.data(),zz.data(),128,wet);
+    a->noteOn(0,60,.8f);b->noteOn(0,60,.8f);double delta=0;
+    for(int block=0;block<120;++block){std::array<float,128> l{},r{},ll{},rr{};a->render(l.data(),r.data(),128,dry);b->render(ll.data(),rr.data(),128,wet);for(int j=0;j<128;++j){check(std::isfinite(ll[j])&&std::isfinite(rr[j]),"advanced LFO output finite");delta+=std::abs(ll[j]-l[j]);}}
+    check(delta>.001,"advanced LFO actual destination");
+  }
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }

@@ -23,7 +23,7 @@ struct Layer {
     float filterKey=0,filterVelocity=0,filterDepth=0,filterAttack=.02f,filterDecay=.3f,filterSustain=.5f,filterRelease=.4f;
     Layer(){osc[0].level=1;}
 };
-struct Patch { std::array<Layer,layers> layer{}; std::array<LfoParams,lfoCount> lfo{}; float master=.7f; double bpm=120.; bool experimentalGrouped=false; bool experimentalTiled=false; int experimentalInterpolation=0; bool experimentalGrainWindow=false; bool experimentalGrainPrepared=false; bool experimentalAnalog=false; bool experimentalEnv=false; };
+struct Patch { std::array<Layer,layers> layer{}; std::array<LfoParams,lfoCount> lfo{}; float master=.7f; double bpm=120.,ppq=0;bool transportValid=false; bool experimentalGrouped=false; bool experimentalTiled=false; int experimentalInterpolation=0; bool experimentalGrainWindow=false; bool experimentalGrainPrepared=false; bool experimentalAnalog=false; bool experimentalEnv=false; };
 inline float blep(double p, double dt) noexcept {
     if(dt<=0) return 0;
     if(p<dt){ p/=dt; return float(p+p-p*p-1); }
@@ -103,13 +103,14 @@ struct Voice {
 class Engine {
     double sr=48000;
     std::uint64_t counter=0;
+    std::array<double,lfoCount> freeCycles{};
     // Allocate the fixed voice pool once, outside the audio callback.
     std::vector<Voice> v = std::vector<Voice>(voices);
     std::array<bool,16> pedal{};
     std::array<float,16> bend{};
 public:
     void prepare(double rate) noexcept {sr=std::max(8000.,rate);(void)waveBank();(void)hdBank();(void)factoryGrains();(void)hannLut();(void)sineLut();reset();}
-    void reset() noexcept {for(auto& voice:v)voice.reset();pedal={};bend={};counter=0;}
+    void reset() noexcept {for(auto& voice:v)voice.reset();pedal={};bend={};counter=0;freeCycles={};}
     void noteOn(int ch,int note,float velocity) noexcept {
       if(ch<0||ch>=16)return;
       if(velocity<=0){noteOff(ch,note);return;}
@@ -141,7 +142,7 @@ public:
       return out;
     }
     bool voiceActive(int index)const noexcept{return index>=0&&index<voices&&v[size_t(index)].active;}
-    void render(float* left,float* right,int n,const Patch& patch) noexcept {renderRange(left,right,n,patch,0,voices);}
+    void render(float* left,float* right,int n,const Patch& patch) noexcept {if(n<=0)return;renderRange(left,right,n,patch,0,voices);for(int i=0;i<lfoCount;++i)if(patch.lfo[i].mode!=0){freeCycles[i]+=n*lfoHz(patch.lfo[i],patch.bpm)/sr;if(freeCycles[i]>=4294967296.)freeCycles[i]-=4294967296.;}}
     // Disjoint ranges may be processed concurrently with immutable patch and MIDI state.
     // Caller must join all tasks before modifying MIDI state or reading telemetry.
     void renderRange(float* left,float* right,int n,const Patch& patch,int first,int last) noexcept {
@@ -150,8 +151,8 @@ public:
       if(!any)return;
       std::array<float,layers> alpha{},gl{},gr{};
       std::array<EnvPlan,layers> envelopes{},filterEnvelopes{};
-      std::array<bool,layers> modulated{},lfoCutoff{};std::array<int,lfoCount> activeLfo{};std::array<double,lfoCount> lfoStep{};int activeCount=0;
-      for(int i=0;i<lfoCount;++i){const auto& l=patch.lfo[i];if(l.destination<=0||l.destination>4||l.depth==0)continue;activeLfo[activeCount++]=i;lfoStep[i]=lfoHz(l,patch.bpm)/sr;if(l.destination==1||l.destination==2)for(int k=0;k<layers;++k)if(l.layer==0||l.layer==k+1)lfoCutoff[k]=true;}
+      std::array<bool,layers> modulated{},lfoCutoff{},lfoOsc{};std::array<int,lfoCount> activeLfo{};std::array<double,lfoCount> lfoStep{};int activeCount=0;
+      for(int i=0;i<lfoCount;++i){const auto& l=patch.lfo[i];if(l.destination<=0||l.destination>8||l.depth==0)continue;activeLfo[activeCount++]=i;lfoStep[i]=lfoHz(l,patch.bpm)/sr;if(l.destination==1||l.destination==2)for(int k=0;k<layers;++k)if(l.layer==0||l.layer==k+1)lfoCutoff[k]=true;if(l.destination>=5)for(int k=0;k<layers;++k)if(l.layer==0||l.layer==k+1)lfoOsc[k]=true;}
       std::array<std::array<FilterPlan,2>,layers> filters{};
       auto analog=patch.experimentalAnalog?fastOscillator:oscillator;
       std::array<std::array<OscParams,oscillatorCount>,layers> prepared{};
@@ -180,7 +181,7 @@ public:
             for(int k=0;k<layers;++k){
               // Release can end mid-tile. Keep that path sample accurate.
               auto stage=a.env[k].stage;
-              if(stage==Env::release||stage==Env::off)continue;
+              if(stage==Env::release||stage==Env::off||lfoOsc[k])continue;
               for(int o=0;o<oscillatorCount;++o)if(canGroupTable(prepared[k][o])&&prepared[k][o].level>0){
                 tiled[k][o]=true;renderTableTile(a.hybrid[k][o],prepared[k][o],dt[k],tile[k][o].data(),count);
               }
@@ -189,8 +190,8 @@ public:
           for(int j=0;j<count;++j){
           int i=offset+j;
           float l=0,r=0;bool alive=false;
-          std::array<std::array<float,4>,layers> modulation{};
-          for(int jLfo=0;jLfo<activeCount;++jLfo){int idx=activeLfo[jLfo];const auto& source=patch.lfo[idx];float value=a.lfo[idx].tick(source,lfoStep[idx]);for(int k=0;k<layers;++k)if(source.layer==0||source.layer==k+1)modulation[k][source.destination-1]+=value;}
+          std::array<std::array<float,8>,layers> modulation{};
+          for(int jLfo=0;jLfo<activeCount;++jLfo){int idx=activeLfo[jLfo];const auto& source=patch.lfo[idx];float value;if(source.mode==0)value=a.lfo[idx].tick(source,lfoStep[idx]);else{double cycles=freeCycles[idx]+i*lfoStep[idx];if(source.mode==2&&patch.transportValid&&source.division>0)cycles=patch.ppq*lfoHz(source,patch.bpm)*60/std::clamp(patch.bpm,20.,400.)+i*lfoStep[idx];value=lfoAt(source,cycles);}for(int k=0;k<layers;++k)if(source.layer==0||source.layer==k+1)modulation[k][source.destination-1]+=value;}
           for(int k=0;k<layers;++k){
             const auto& p=patch.layer[k];auto& e=a.env[k];
             float fe=a.filterEnv[k].tickPrepared(filterEnvelopes[k]);
@@ -198,16 +199,25 @@ public:
             float env=patch.experimentalEnv?e.tickPrepared(envelopes[k]):e.tick(p,sr);alive|=e.stage!=Env::off;
             if(e.stage==Env::off)continue;
             float x=0;
+            double pitchDt=dt[k];if(modulation[k][4]!=0)pitchDt=std::clamp(pitchDt*std::exp2(std::clamp(double(modulation[k][4]),-4.,4.)),0.,.45);
+            auto renderOsc=[&](int o){const auto& base=prepared[k][o];if(tiled[k][o])return tile[k][o][j];
+              if((base.mode==OscMode::wavetable&&modulation[k][5]!=0)||(base.mode==OscMode::granular&&(modulation[k][6]!=0||modulation[k][7]!=0))){
+                auto m=base;if(m.mode==OscMode::wavetable)m.morph=std::clamp(m.morph+modulation[k][5]*.5f,0.f,1.f);
+                else {m.grain.position=std::clamp(m.grain.position+modulation[k][6]*.5f,0.f,1.f);m.grain.density=std::clamp(m.grain.density*std::exp2(std::clamp(modulation[k][7],-3.f,3.f)),1.f,80.f);}
+                return renderHybrid(a.hybrid[k][o],m,sources[k][o],pitchDt,sr,analog,patch.bpm);
+              }
+              return renderHybrid(a.hybrid[k][o],base,sources[k][o],pitchDt,sr,analog,patch.bpm);
+            };
             if(legacy(p.osc[0])){
-              x=analog(p.wave,a.phase[k],dt[k]);
-              a.phase[k]+=dt[k];if(a.phase[k]>=1)a.phase[k]-=1;
+              x=analog(p.wave,a.phase[k],pitchDt);
+              a.phase[k]+=pitchDt;if(a.phase[k]>=1)a.phase[k]-=1;
               a.hybrid[k][0].phase[0]=a.phase[k];
             }else{
-              x=tiled[k][0]?tile[k][0][j]:renderHybrid(a.hybrid[k][0],prepared[k][0],sources[k][0],dt[k],sr,analog,patch.bpm);
+              x=renderOsc(0);
               a.phase[k]=a.hybrid[k][0].phase[0];
             }
             for(int o=1;o<oscillatorCount;++o)if(p.osc[o].level>0)
-              x+=tiled[k][o]?tile[k][o][j]:renderHybrid(a.hybrid[k][o],prepared[k][o],sources[k][o],dt[k],sr,analog,patch.bpm);
+              x+=renderOsc(o);
             a.low[k]+=voiceAlpha[k]*(x-a.low[k]);
             float filtered=p.filter1.model==0?a.low[k]:a.filters[k][0].tick(x,voiceFilters[k][0]);
             if(p.filter2.model!=1){float second=a.filters[k][1].tick(p.filterParallel?x:filtered,voiceFilters[k][1]);filtered=p.filterParallel?std::lerp(filtered,second,p.filterMix):second;}
