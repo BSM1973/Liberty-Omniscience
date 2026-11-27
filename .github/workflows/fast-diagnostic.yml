@@ -83,12 +83,22 @@ jobs:
             ./build/CosmosBenchmark --long > cosmos-endurance.csv
           fi
           cat cosmos-endurance.csv
+      - name: Modulation benchmark and endurance
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            ./build/Release/CosmosBenchmark.exe --modulation > cosmos-modulation-performance.csv
+          else
+            ./build/CosmosBenchmark --modulation > cosmos-modulation-performance.csv
+          fi
+          cat cosmos-modulation-performance.csv
       - uses: actions/upload-artifact@v4
         with:
           name: Cosmos-benchmark-${{ matrix.name }}
           path: |
             cosmos-benchmark.csv
             cosmos-endurance.csv
+            cosmos-modulation-performance.csv
           if-no-files-found: error
       - name: Package macOS development binaries
         if: runner.os == 'macOS'
@@ -119,12 +129,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
         with:
-          name: Omniscience-v0.5.5-macOS-ARM64
+          name: Omniscience-v0.5.6-macOS-ARM64
           path: Omniscience-macOS-ARM64.zip
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
-          name: Omniscience-v0.5.5-Windows-x64
+          name: Omniscience-v0.5.6-Windows-x64
           path: Omniscience-Windows-x64.zip
           if-no-files-found: error

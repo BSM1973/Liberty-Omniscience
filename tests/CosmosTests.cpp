@@ -390,5 +390,14 @@ int main(){
   r.polarity=1;check(std::abs(cosmos::matrixValue(.3125f,r)+.45f)<1e-6f,"custom curve signed interpolation");
   auto e=std::make_unique<cosmos::Engine>();e->prepare(48000);cosmos::Patch p;p.lfo[0].destination=3;p.lfo[0].depth=.5f;p.lfo[0].rate=2;e->noteOn(0,60,.8f);std::array<float,128> l{},rr{};e->render(l.data(),rr.data(),128,p);check(std::abs(e->lfoPhases()[0]-127.f*2/48000)<1e-5f,"LFO phase telemetry");
  }
+ {
+  cosmos::ModEnvParams p;p.free.enabled=true;p.free.count=4;p.free.x={0,.25f,.75f,1};p.free.y={0,1,.2f,.5f};p.free.curve[0]=1;p.segmentTime=1;p.depth=1;p.release=.01f;
+  cosmos::ModEnvPlan plan(p,48000,120);check(std::abs(cosmos::freeEnvelopeValue(plan,.125f)-.25f)<1e-6f,"free envelope segment curve");
+  cosmos::ModEnvState s;s.start();for(int i=0;i<48001;++i)s.tick(plan,1);check(s.stage==cosmos::ModEnvState::sustain&&std::abs(s.level-.5f)<1e-5f,"free envelope sustain");s.stop();for(int i=0;i<500;++i)s.tick(plan,1);check(s.stage==cosmos::ModEnvState::off,"free envelope release");
+  auto a=std::make_unique<cosmos::Engine>(),b=std::make_unique<cosmos::Engine>();a->prepare(48000);b->prepare(48000);cosmos::Patch ref;ref.experimentalMatrixFast=false;ref.modEnv[0]=p;
+  for(int j=0;j<64;++j)ref.matrix[j]={true,1+j%20,3,j%5,0,.01f};auto fast=ref;fast.experimentalMatrixFast=true;
+  for(int j=0;j<32;++j){a->noteOn(0,40+j,.7f);b->noteOn(0,40+j,.7f);}
+  for(int block=0;block<120;++block){std::array<float,128> l{},r{},ll{},rr{};a->render(l.data(),r.data(),128,ref);b->render(ll.data(),rr.data(),128,fast);for(int j=0;j<128;++j)check(l[j]==ll[j]&&r[j]==rr[j]&&std::isfinite(l[j]),"64 route layer range exact AB");}
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }

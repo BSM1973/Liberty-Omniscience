@@ -5,7 +5,17 @@
 #include <vector>
 #include <memory>
 #include <string>
-int main(int argc,char** argv){
+int modulationBenchmark(){
+  constexpr int n=128;constexpr double sr=48000.;std::cout<<"scenario,voices,seconds,mean_budget_pct,p95,p99,max,misses,finite,peak\n";
+  for(int mode=0;mode<4;++mode){int notes=mode==1?8:32,blocks=mode==3?22500:375;auto e=std::make_unique<cosmos::Engine>();e->prepare(sr);cosmos::Patch p;
+    if(mode){for(int i=0;i<64;++i)p.matrix[i]={true,1+i%20,3+(i%2),i%5,0,.0125f};for(auto& ep:p.modEnv){ep.play=1;ep.free.enabled=true;ep.segmentTime=.15f;}}
+    for(int i=0;i<notes;++i)e->noteOn(0,40+i,.7f);
+    std::vector<double> times;times.reserve(blocks);bool finite=true;float peak=0;double sum=0;int misses=0;
+    for(int block=0;block<blocks;++block){std::array<float,n> l{},r{};auto start=std::chrono::steady_clock::now();e->render(l.data(),r.data(),n,p);double cost=100*std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count()/(n/sr);times.push_back(cost);sum+=cost;misses+=cost>100;for(int i=0;i<n;++i){finite&=std::isfinite(l[i])&&std::isfinite(r[i]);peak=std::max({peak,std::abs(l[i]),std::abs(r[i])});}}
+    std::sort(times.begin(),times.end());std::cout<<(mode?"64_routes":"inactive")<<','<<notes<<','<<blocks*n/sr<<','<<sum/blocks<<','<<times[size_t(.95*(blocks-1))]<<','<<times[size_t(.99*(blocks-1))]<<','<<times.back()<<','<<misses<<','<<finite<<','<<peak<<'\n';if(!finite)return 1;
+  }return 0;
+}
+int main(int argc,char** argv){if(argc>1&&std::string(argv[1])=="--modulation")return modulationBenchmark();
   constexpr int n=128;constexpr double sr=48000.;const bool longRun=argc>1&&std::string(argv[1])=="--long";const int blocks=longRun?22500:375;
   auto engine=std::make_unique<cosmos::Engine>();auto& e=*engine;e.prepare(sr);
   std::vector<float> l(n),r(n);
