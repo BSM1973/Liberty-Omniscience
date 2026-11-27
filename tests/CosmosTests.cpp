@@ -359,5 +359,19 @@ int main(){
   for(int block=0;block<100;++block){std::array<float,128> l{},r{},ll{},rr{};a->render(l.data(),r.data(),128,dry);b->render(ll.data(),rr.data(),128,wet);for(int j=0;j<128;++j){check(std::isfinite(ll[j]),"mod env audio finite");diff+=std::abs(ll[j]-l[j]);}}
   check(diff>.01,"twelfth mod envelope actual audio route");
  }
+ {
+  auto a=std::make_unique<cosmos::Engine>(),b=std::make_unique<cosmos::Engine>();a->prepare(48000);b->prepare(48000);
+  cosmos::Patch dry,wet;for(int k=1;k<4;++k){dry.layer[k].enabled=false;wet.layer[k].enabled=false;}
+  for(auto& m:wet.matrix)m={true,23,3,1,0,-.01f};
+  a->noteOn(0,60,.8f);b->noteOn(0,60,.8f);b->controller(0,1,127);
+  double energyA=0,energyB=0;
+  for(int block=0;block<100;++block){std::array<float,128> l{},r{},ll{},rr{};a->render(l.data(),r.data(),128,dry);b->render(ll.data(),rr.data(),128,wet);for(int j=0;j<128;++j){check(std::isfinite(ll[j]),"64 route output finite");energyA+=double(l[j])*l[j];energyB+=double(ll[j])*ll[j];}}
+  check(energyA>0&&std::abs(std::sqrt(energyB/energyA)-.36)<.001,"64 routes additive CC1 modulation");
+  for(int source:{1,8,9,20,21,22,24,25,26,154}){
+    a->prepare(48000);b->prepare(48000);wet=dry;wet.matrix[63]={true,source,3,1,0,-.8f};
+    a->noteOn(0,60,.8f);b->noteOn(0,60,.8f);b->pressure(0,100);b->polyAftertouch(0,60,100);b->controller(0,127,100);
+    double diff=0;for(int block=0;block<100;++block){std::array<float,128> l{},r{},ll{},rr{};a->render(l.data(),r.data(),128,dry);b->render(ll.data(),rr.data(),128,wet);for(int j=0;j<128;++j)diff+=std::abs(l[j]-ll[j]);}check(diff>.001,"matrix source active without direct route");
+  }
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }
