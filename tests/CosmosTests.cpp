@@ -275,5 +275,14 @@ int main(){
     check(std::abs(out/in-1)<.01,"allpass unity magnitude");
   }
  }
+ {
+  for(int model=42;model<cosmos::filterModelCount;++model)for(float morph:{0.f,.5f,1.f}){
+    cosmos::FilterState st;cosmos::FilterPlan p({model,1200,.8f,.1f,false,morph},48000);
+    double energy=0;for(int j=0;j<8192;++j){float y=st.tick(j==0?1.f:0.f,p);check(std::isfinite(y)&&std::abs(y)<100,"creative filter bounded");energy+=double(y)*y;}
+    check(energy>1e-10,"creative response nonzero");
+  }
+  cosmos::Env fe;fe.start();cosmos::EnvPlan plan(.01f,.02f,.5f,.03f,48000);for(int j=0;j<1600;++j)fe.tickPrepared(plan);
+  check(std::abs(fe.level-.5f)<1e-4f,"filter envelope sustain");fe.stop();for(int j=0;j<1500;++j)fe.tickPrepared(plan);check(fe.stage==cosmos::Env::off,"filter envelope release");
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }

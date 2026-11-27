@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <cmath>
 namespace cosmos {
-constexpr int filterModelCount=42;
-struct FilterParams {int model=0;float cutoff=8000,resonance=0,drive=0;bool autoGain=false;};
+constexpr int filterModelCount=54;
+struct FilterParams {int model=0;float cutoff=8000,resonance=0,drive=0;bool autoGain=false;float morph=.5f;};
 constexpr int combCapacity=9602;
 struct SpectralBiquad {
     double b0=1,b1=0,b2=0,a1=0,a2=0;
@@ -28,13 +28,38 @@ struct FilterPlan {
     float g=0,a1=1,a2=0,a3=0,k=1.41421356f,b1=1,b2=0,b3=0,drive=0,driveNorm=1,legacyAlpha=0;
     int analogPoles=0;float analogStep=0,feedback=0,analogDrive=1,compensation=1;bool analog=false;
     int spectralCount=0;bool spectralParallel=false,comb=false,combFeedback=false;
-    float combGain=0,combDelay=1;std::array<SpectralBiquad,3> spectral{};
+    float combGain=0,combDelay=1,combDamping=0,morph=.5f;bool creativeSVF=false,phaser=false;std::array<SpectralBiquad,3> spectral{};
     FilterPlan()=default;
     FilterPlan(FilterParams p,double sr){
       model=std::clamp(p.model,0,filterModelCount-1);
       double hz=std::clamp(double(p.cutoff),20.,sr*.45);
       legacyAlpha=float(1-std::exp(-6.283185307179586*hz/sr));
       if(model<2)return;
+      if(model>=42){
+        double res=std::clamp(double(p.resonance),0.,1.);
+        morph=std::clamp(p.morph,0.f,1.f);
+        drive=std::clamp(p.drive,0.f,1.f);
+        if(drive>0){drive=1+8*drive;driveNorm=1/std::tanh(drive);}
+        if(model<=44){
+          creativeSVF=true;g=float(std::tan(3.141592653589793*hz/sr));k=float(1/(.707+3.3*res));
+          a1=1/(1+g*(g+k));a2=g*a1;a3=g*a2;return;
+        }
+        if(model==49||model==50){
+          comb=true;combFeedback=true;combGain=float((model==49?1:-1)*(.1+.84*res));combDelay=float(std::clamp(sr/hz,1.,double(combCapacity-2)));combDamping=.03f+.92f*(1-morph);return;
+        }
+        if(model==47||model==48){
+          phaser=true;spectralCount=model==47?2:3;
+          for(int i=0;i<spectralCount;++i)spectral[i]=SpectralBiquad::make(1,hz*std::pow(1.7,i-1),.7+2*res,0,sr);
+          return;
+        }
+        spectralCount=3;spectralParallel=true;
+        constexpr double vowel[3][2][3]={{{800,1150,2900},{300,2200,3000}},{{450,800,2830},{325,700,2530}},{{800,1150,2900},{450,800,2830}}};
+        for(int i=0;i<3;++i){
+          double centre=model==45?hz*(i+1):model==46?hz*(2*i+1):std::lerp(vowel[model-51][0][i],vowel[model-51][1][i],double(morph))*hz/1200.;
+          spectral[i]=SpectralBiquad::make(0,centre,2+10*res,0,sr);
+        }
+        return;
+      }
       if(model>=26){
         const double res=std::clamp(double(p.resonance),0.,1.);
         drive=std::clamp(p.drive,0.f,1.f);
@@ -77,18 +102,20 @@ struct FilterPlan {
 };
 struct FilterState {
     std::array<float,4> s1{},s2{};float pole=0,legacy=0;std::array<float,4> analogState{};int prior=-1;
-    std::array<float,combCapacity> delay{};int delayWrite=0,delayValid=0;
+    std::array<float,combCapacity> delay{};int delayWrite=0,delayValid=0;float dampState=0;
     std::array<double,3> spectralZ1{},spectralZ2{};
     float tick(float x,const FilterPlan& p)noexcept{
-      if(prior!=p.model){s1={};s2={};analogState={};pole=legacy=0;delayWrite=delayValid=0;spectralZ1={};spectralZ2={};prior=p.model;}
+      if(prior!=p.model){s1={};s2={};analogState={};pole=legacy=0;delayWrite=delayValid=0;dampState=0;spectralZ1={};spectralZ2={};prior=p.model;}
       if(p.model==1)return x;
       if(p.model==0){legacy+=p.legacyAlpha*(x-legacy);return legacy;}
       if(p.model>=26){
         if(p.drive>0)x=std::tanh(x*p.drive)*p.driveNorm;
+        if(p.creativeSVF){float v3=x-s2[0],v1=p.a1*s1[0]+p.a2*v3,v2=s2[0]+p.a2*s1[0]+p.a3*v3;s1[0]=2*v1-s1[0];s2[0]=2*v2-s2[0];float hp=x-p.k*v1-v2,bp=p.k*v1,notch=hp+v2;if(p.model==42)return p.morph<.5f?std::lerp(v2,bp,2*p.morph):std::lerp(bp,hp,2*p.morph-1);return p.model==43?std::lerp(v2,notch,p.morph):std::lerp(bp,hp,p.morph);}
         if(p.comb){
           int whole=int(p.combDelay);float frac=p.combDelay-whole;
           auto read=[&](int back){return back<=delayValid?delay[(delayWrite+combCapacity-back)%combCapacity]:0.f;};
           float d=std::lerp(read(whole),read(whole+1),frac);
+          if(p.combDamping>0){dampState+=p.combDamping*(d-dampState);d=dampState;}
           float y=x+p.combGain*d;
           delay[delayWrite]=p.combFeedback?y:x;
           if(++delayWrite==combCapacity)delayWrite=0;
@@ -102,7 +129,7 @@ struct FilterState {
           spectralZ1[i]=c.b1*in-c.a1*out+spectralZ2[i];spectralZ2[i]=c.b2*in-c.a2*out;
           if(p.spectralParallel)y+=out;else u=out;
         }
-        double out=p.spectralParallel?y/3.:u;
+        double out=p.spectralParallel?y/3.:p.phaser?std::lerp(double(x),u,double(p.morph)):u;
         if(!std::isfinite(out)){spectralZ1={};spectralZ2={};return 0;}
         return float(out);
       }
