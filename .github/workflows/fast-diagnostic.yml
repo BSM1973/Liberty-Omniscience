@@ -45,6 +45,23 @@ jobs:
             cosmos-preset-audio/
             cosmos-ui-qa/
           if-no-files-found: warn
+      - name: Filter professional qualification
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            ./build/Release/CosmosFilterQA.exe
+          else
+            ./build/CosmosFilterQA
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Cosmos-filter-QA-${{ matrix.name }}
+          path: |
+            cosmos-filter-quality.csv
+            cosmos-filter-response.csv
+            cosmos-filter-routing.csv
+          if-no-files-found: warn
       - name: DSP benchmark
         shell: bash
         run: |
@@ -99,12 +116,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
         with:
-          name: Omniscience-v0.4.4-macOS-ARM64
+          name: Omniscience-v0.4.5-macOS-ARM64
           path: Omniscience-macOS-ARM64.zip
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
-          name: Omniscience-v0.4.4-Windows-x64
+          name: Omniscience-v0.4.5-Windows-x64
           path: Omniscience-Windows-x64.zip
           if-no-files-found: error
