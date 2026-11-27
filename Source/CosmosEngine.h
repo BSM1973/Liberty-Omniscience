@@ -95,6 +95,7 @@ struct Voice {
     std::array<std::array<FilterState,2>,layers> filters{};
     std::array<Env,layers> env{},filterEnv{};
     std::array<std::array<HybridVoice,oscillatorCount>,layers> hybrid{};
+    void reset() noexcept {active=held=false;note=channel=0;velocity=0;age=0;phase={};low={};env={};filterEnv={};hybrid={};for(auto& pair:filters)for(auto& f:pair)f.reset();}
     void stop() noexcept {held=false;for(auto& e:env)e.stop();for(auto& e:filterEnv)e.stop();}
 };
 class Engine {
@@ -106,14 +107,14 @@ class Engine {
     std::array<float,16> bend{};
 public:
     void prepare(double rate) noexcept {sr=std::max(8000.,rate);(void)waveBank();(void)hdBank();(void)factoryGrains();(void)hannLut();(void)sineLut();reset();}
-    void reset() noexcept {for(auto& voice:v)voice=Voice{};pedal={};bend={};counter=0;}
+    void reset() noexcept {for(auto& voice:v)voice.reset();pedal={};bend={};counter=0;}
     void noteOn(int ch,int note,float velocity) noexcept {
       if(ch<0||ch>=16)return;
       if(velocity<=0){noteOff(ch,note);return;}
       Voice* w=nullptr;
       for(auto& a:v)if(!a.active){w=&a;break;}
       if(!w)w=&*std::min_element(v.begin(),v.end(),[](const Voice& a,const Voice& b){if(a.held!=b.held)return !a.held;return a.age<b.age;});
-      *w=Voice{}; w->active=w->held=true;w->note=note;w->channel=ch;w->velocity=std::clamp(velocity,0.f,1.f);w->age=++counter;
+      w->reset(); w->active=w->held=true;w->note=note;w->channel=ch;w->velocity=std::clamp(velocity,0.f,1.f);w->age=++counter;
       for(auto& e:w->env)e.start();for(auto& e:w->filterEnv)e.start();
       for(int k=0;k<layers;++k)for(int o=0;o<oscillatorCount;++o)w->hybrid[k][o].seed(o,k,note,w->age);
     }
@@ -126,7 +127,7 @@ public:
       pedal[ch]=down;if(!down)for(auto& a:v)if(a.active&&a.channel==ch&&!a.held)a.stop();
     }
     void pitch(int ch,int value) noexcept {if(ch>=0&&ch<16)bend[ch]=2.f*float(value-8192)/8192.f;}
-    void allOff(int ch,bool immediate) noexcept {for(auto& a:v)if(a.active&&a.channel==ch){if(immediate)a=Voice{};else a.stop();}}
+    void allOff(int ch,bool immediate) noexcept {for(auto& a:v)if(a.active&&a.channel==ch){if(immediate)a.reset();else a.stop();}}
     std::array<float,16> grainPositions(int layer,int osc,const SampleData* source)const noexcept{
       std::array<float,16> out;out.fill(-1.f);
       if(!source||source->mono.empty())return out;

@@ -27,7 +27,7 @@ jobs:
         run: cmake --build build --config Release --parallel 3
       - name: DSP tests
         run: ctest --test-dir build -C Release --output-on-failure
-      - name: Render 252 presets and verify processor state
+      - name: Render 270 presets and verify processor state
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == "Windows" ]]; then
@@ -99,12 +99,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
         with:
-          name: Omniscience-v0.4.3-macOS-ARM64
+          name: Omniscience-v0.4.4-macOS-ARM64
           path: Omniscience-macOS-ARM64.zip
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
-          name: Omniscience-v0.4.3-Windows-x64
+          name: Omniscience-v0.4.4-Windows-x64
           path: Omniscience-Windows-x64.zip
           if-no-files-found: error

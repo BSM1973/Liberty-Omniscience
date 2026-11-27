@@ -284,5 +284,26 @@ int main(){
   cosmos::Env fe;fe.start();cosmos::EnvPlan plan(.01f,.02f,.5f,.03f,48000);for(int j=0;j<1600;++j)fe.tickPrepared(plan);
   check(std::abs(fe.level-.5f)<1e-4f,"filter envelope sustain");fe.stop();for(int j=0;j<1500;++j)fe.tickPrepared(plan);check(fe.stage==cosmos::Env::off,"filter envelope release");
  }
+ {
+  for(double sr:{44100.,48000.,96000.})for(int model=54;model<72;++model){
+    cosmos::FilterState st;cosmos::FilterPlan p({model,1200,.8f,.2f,false,.5f},sr);
+    double energy=0;for(int j=0;j<8192;++j){float x=j<4096?.5f*float(std::sin(2*cosmos::pi*330*j/sr)):0.f;float y=st.tick(x,p);check(std::isfinite(y)&&std::abs(y)<100,"ultimate filter bounded");energy+=double(y)*y;}
+    check(energy>1e-10,"ultimate filter nonzero");
+  }
+  for(double sr:{44100.,48000.,96000.}){
+    cosmos::FilterState st;cosmos::FilterPlan p({71,440,1,0},sr);
+    int crossings=0;float previous=0;double energy=0;
+    for(int j=0;j<int(sr);++j){float y=st.tick(j==0?.5f:0.f,p);if(j>=int(sr/2)){if(previous<=0&&y>0)++crossings;energy+=double(y)*y;}previous=y;}
+    check(std::abs(2*crossings-440)<=4&&energy>1e-4,"self resonator frequency and sustained energy");
+  }
+  // Compare ADAA shaper to midpoint-free direct saturation at a coherent high tone.
+  // Third harmonic folds from 30 kHz to 18 kHz at 48 kHz.
+  double ar=0,ai=0,dr=0,di=0;float previous=0;
+  for(int j=0;j<4800;++j){float x=2*float(std::sin(2*cosmos::pi*10000*j/48000)),delta=x-previous;
+    float a=std::abs(delta)>.001f?(cosmos::FilterState::asymmetricPrimitive(x)-cosmos::FilterState::asymmetricPrimitive(previous))/delta:cosmos::FilterState::asymmetricShape(.5f*(x+previous));
+    float d=cosmos::FilterState::asymmetricShape(x);previous=x;
+    double c=std::cos(2*cosmos::pi*18000*j/48000),s=std::sin(2*cosmos::pi*18000*j/48000);ar+=a*c;ai+=a*s;dr+=d*c;di+=d*s;}
+  check(std::hypot(ar,ai)<std::hypot(dr,di),"ADAA reduces selected folded third harmonic");
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }

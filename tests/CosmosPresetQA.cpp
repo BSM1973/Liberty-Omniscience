@@ -128,7 +128,7 @@ int main(){
         return nullptr;
     };
     cosmosSetReferenceDSP(*b,true);
-    auto* ma=master(*a);auto* mb=master(*b);if(!ma||!mb||a->getNumPrograms()!=252)return 1;
+    auto* ma=master(*a);auto* mb=master(*b);if(!ma||!mb||a->getNumPrograms()!=270)return 1;
     std::filesystem::create_directories("cosmos-preset-audio");
     std::ofstream report("cosmos-presets.csv");
     report<<"preset,name,rms,peak,finite,reference_state_max_error,automation_restored,passed\n";
@@ -136,7 +136,7 @@ int main(){
     for(int i=0;i<a->getNumPrograms();++i){
         a->setCurrentProgram(i);ma->beginChangeGesture();ma->setValueNotifyingHost(.61f);ma->endChangeGesture();
         juce::MemoryBlock state;a->getStateInformation(state);
-        b->setCurrentProgram((i+1)%252);b->setStateInformation(state.getData(),int(state.getSize()));
+        b->setCurrentProgram((i+1)%270);b->setStateInformation(state.getData(),int(state.getSize()));
         auto r=render(*a),s=render(*b);float maxError=0;
         for(size_t j=0;j<r.data.size();++j)maxError=std::max(maxError,std::abs(r.data[j]-s.data[j]));
         bool restored=std::abs(mb->getValue()-.61f)<1e-5f&&b->getCurrentProgram()==i;
@@ -146,7 +146,7 @@ int main(){
         report<<i+1<<",\""<<a->getProgramName(i).toStdString()<<"\","<<r.rms<<','<<r.peak<<','<<r.finite<<','<<maxError<<','<<restored<<','<<ok<<'\n';
         if(!ok){++failed;std::cerr<<"Preset "<<i+1<<" failed\n";}
     }
-    std::cout<<252-failed<<"/252 presets passed automated DSP/state checks\n";
+    std::cout<<270-failed<<"/270 presets passed automated DSP/state checks\n";
     bool qualified=qualifyProcessor(*a,*b,*ma,*mb);
     bool imported=qualifyImports();
     auto guiDir=juce::File::getCurrentWorkingDirectory().getChildFile("cosmos-ui-qa");

@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 namespace cosmos {
-constexpr int filterModelCount=54;
+constexpr int filterModelCount=72;
 struct FilterParams {int model=0;float cutoff=8000,resonance=0,drive=0;bool autoGain=false;float morph=.5f;};
 constexpr int combCapacity=9602;
 struct SpectralBiquad {
@@ -28,13 +28,53 @@ struct FilterPlan {
     float g=0,a1=1,a2=0,a3=0,k=1.41421356f,b1=1,b2=0,b3=0,drive=0,driveNorm=1,legacyAlpha=0;
     int analogPoles=0;float analogStep=0,feedback=0,analogDrive=1,compensation=1;bool analog=false;
     int spectralCount=0;bool spectralParallel=false,comb=false,combFeedback=false;
-    float combGain=0,combDelay=1,combDamping=0,morph=.5f;bool creativeSVF=false,phaser=false;std::array<SpectralBiquad,3> spectral{};
+    float combGain=0,combDelay=1,combDamping=0,morph=.5f;bool creativeSVF=false,phaser=false;std::array<SpectralBiquad,4> spectral{};
+    bool lpg=false,asymmetric=false,selfResonator=false;float gateAttack=0,gateRelease=0,gateRate=0,rotationCos=1,rotationSin=0,resonatorRadius=0;
     FilterPlan()=default;
     FilterPlan(FilterParams p,double sr){
       model=std::clamp(p.model,0,filterModelCount-1);
       double hz=std::clamp(double(p.cutoff),20.,sr*.45);
       legacyAlpha=float(1-std::exp(-6.283185307179586*hz/sr));
       if(model<2)return;
+      if(model>=54){
+        double res=std::clamp(double(p.resonance),0.,1.);
+        morph=std::clamp(p.morph,0.f,1.f);
+        drive=std::clamp(p.drive,0.f,1.f);
+        if(drive>0){drive=1+8*drive;driveNorm=1/std::tanh(drive);}
+        if(model<=56){
+          lpg=true;gateAttack=float(1-std::exp(-1./(sr*(model==55?.002:.012))));gateRelease=float(1-std::exp(-1./(sr*(model==55?.035:.22))));
+          gateRate=float(1-std::exp(-6.283185307179586*hz/sr));return;
+        }
+        if(model<=58){
+          asymmetric=true;g=float(std::tan(3.141592653589793*hz/sr));k=float(1/(.707+3.3*res));
+          a1=1/(1+g*(g+k));a2=g*a1;a3=g*a2;return;
+        }
+        if(model==71){
+          selfResonator=true;double w=6.283185307179586*hz/sr;
+          rotationCos=float(std::cos(w));rotationSin=float(std::sin(w));
+          resonatorRadius=float(std::exp((res-.95)*300/sr));return;
+        }
+        if(model<=62){
+          spectralCount=4;spectralParallel=true;
+          constexpr double ratios[4][4]={{1,1.414,2.137,3.73},{1,1.62,2.91,5.17},{1,2.76,5.4,8.93},{1,1.07,2.31,4.42}};
+          for(int i=0;i<4;++i)spectral[i]=SpectralBiquad::make(0,hz*ratios[model-59][i],4+18*res,0,sr);
+        }else if(model<=66){
+          spectralCount=4;spectralParallel=model<=64;
+          for(int i=0;i<4;++i){
+            double centre=hz*std::pow(model%2?1.7:2.4,i-1.5);
+            spectral[i]=SpectralBiquad::make(spectralParallel?0:2,centre,1+6*res,(i%2?-1:1)*(3+9*res),sr);
+          }
+        }else{
+          spectralCount=2;
+          // Cascaded hybrid responses: resonator+bell, resonator+shelf,
+          // allpass+bell, and two oppositely signed shelves.
+          if(model==67){spectral[0]=SpectralBiquad::make(0,hz,1+6*res,0,sr);spectral[1]=SpectralBiquad::make(2,hz*2,1,9*res,sr);}
+          if(model==68){spectral[0]=SpectralBiquad::make(0,hz,1+6*res,0,sr);spectral[1]=SpectralBiquad::make(4,hz*1.5,1,12*res,sr);}
+          if(model==69){spectral[0]=SpectralBiquad::make(1,hz,.8+3*res,0,sr);spectral[1]=SpectralBiquad::make(2,hz*2,1,-12*res,sr);phaser=true;}
+          if(model==70){spectral[0]=SpectralBiquad::make(3,hz*.5,1,-12*res,sr);spectral[1]=SpectralBiquad::make(4,hz*2,1,12*res,sr);}
+        }
+        return;
+      }
       if(model>=42){
         double res=std::clamp(double(p.resonance),0.,1.);
         morph=std::clamp(p.morph,0.f,1.f);
@@ -103,12 +143,39 @@ struct FilterPlan {
 struct FilterState {
     std::array<float,4> s1{},s2{};float pole=0,legacy=0;std::array<float,4> analogState{};int prior=-1;
     std::array<float,combCapacity> delay{};int delayWrite=0,delayValid=0;float dampState=0;
-    std::array<double,3> spectralZ1{},spectralZ2{};
+    std::array<double,4> spectralZ1{},spectralZ2{};
+    float gate=0,gateLow=0,previousInput=0,resX=0,resY=0;
+    void reset() noexcept{prior=-1;delayWrite=delayValid=0;}
+    static float asymmetricPrimitive(float x) noexcept {float u=x+.25f;return std::abs(u)+std::log1p(std::exp(-2*std::abs(u)))-std::tanh(.25f)*x;}
+    static float asymmetricShape(float x) noexcept{return std::tanh(x+.25f)-std::tanh(.25f);}
     float tick(float x,const FilterPlan& p)noexcept{
-      if(prior!=p.model){s1={};s2={};analogState={};pole=legacy=0;delayWrite=delayValid=0;dampState=0;spectralZ1={};spectralZ2={};prior=p.model;}
+      if(prior!=p.model){s1={};s2={};analogState={};pole=legacy=0;delayWrite=delayValid=0;dampState=0;spectralZ1={};spectralZ2={};gate=gateLow=previousInput=resX=resY=0;prior=p.model;}
       if(p.model==1)return x;
       if(p.model==0){legacy+=p.legacyAlpha*(x-legacy);return legacy;}
       if(p.model>=26){
+        if(p.lpg){
+          float target=std::clamp(std::abs(x)*(1+4*p.morph),0.f,1.f);
+          gate+=(target>gate?p.gateAttack:p.gateRelease)*(target-gate);
+          float coefficient=p.gateRate*(.025f+.975f*gate);
+          gateLow+=coefficient*(x-gateLow);
+          if(p.model==56){pole+=coefficient*.25f*(gateLow-pole);return (gateLow-pole)*gate;}
+          return gateLow*gate;
+        }
+        if(p.asymmetric){
+          float u=x*(p.drive>0?p.drive:1.f),delta=u-previousInput;
+          float shaped=std::abs(delta)>.001f?(asymmetricPrimitive(u)-asymmetricPrimitive(previousInput))/delta:asymmetricShape(.5f*(u+previousInput));
+          previousInput=u;
+          float v3=shaped-s2[0],v1=p.a1*s1[0]+p.a2*v3,v2=s2[0]+p.a2*s1[0]+p.a3*v3;
+          s1[0]=2*v1-s1[0];s2[0]=2*v2-s2[0];
+          return p.model==57?v2:shaped-p.k*v1-v2;
+        }
+        if(p.selfResonator){
+          float mag2=resX*resX+resY*resY;
+          float radius=p.resonatorRadius/(1+.002f*mag2);
+          float a=radius*(p.rotationCos*resX-p.rotationSin*resY)+.02f*x;
+          float b=radius*(p.rotationSin*resX+p.rotationCos*resY);
+          resX=std::clamp(a,-1.f,1.f);resY=std::clamp(b,-1.f,1.f);return resY;
+        }
         if(p.drive>0)x=std::tanh(x*p.drive)*p.driveNorm;
         if(p.creativeSVF){float v3=x-s2[0],v1=p.a1*s1[0]+p.a2*v3,v2=s2[0]+p.a2*s1[0]+p.a3*v3;s1[0]=2*v1-s1[0];s2[0]=2*v2-s2[0];float hp=x-p.k*v1-v2,bp=p.k*v1,notch=hp+v2;if(p.model==42)return p.morph<.5f?std::lerp(v2,bp,2*p.morph):std::lerp(bp,hp,2*p.morph-1);return p.model==43?std::lerp(v2,notch,p.morph):std::lerp(bp,hp,p.morph);}
         if(p.comb){
@@ -129,7 +196,7 @@ struct FilterState {
           spectralZ1[i]=c.b1*in-c.a1*out+spectralZ2[i];spectralZ2[i]=c.b2*in-c.a2*out;
           if(p.spectralParallel)y+=out;else u=out;
         }
-        double out=p.spectralParallel?y/3.:p.phaser?std::lerp(double(x),u,double(p.morph)):u;
+        double out=p.spectralParallel?y/std::max(1,p.spectralCount):p.phaser?std::lerp(double(x),u,double(p.morph)):u;
         if(!std::isfinite(out)){spectralZ1={};spectralZ2={};return 0;}
         return float(out);
       }
