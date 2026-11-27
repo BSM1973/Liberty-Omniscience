@@ -150,7 +150,7 @@ int main(){
     std::cout<<270-failed<<"/270 presets passed automated DSP/state checks\n";
     auto findParameter=[](juce::AudioProcessor& p,const juce::String& key)->juce::AudioProcessorParameter*{for(auto* x:p.getParameters())if(auto* id=dynamic_cast<juce::AudioProcessorParameterWithID*>(x))if(id->paramID==key)return x;return nullptr;};
     bool matrixRestored=true;a->setCurrentProgram(0);b->setCurrentProgram(0);
-    const std::array<std::pair<const char*,float>,12> controls{{{"macro8",.71f},{"matrix64_enabled",1.f},{"matrix64_oscillator",.4f},{"matrix64_curve",1.f},{"matrix64_smoothing",.35f},{"modenv12_freeEnabled",1.f},{"modenv12_freeCount",.5f},{"modenv12_freeY2",.73f},{"modenv12_freeCurve1",1.f},{"matrix64_point2",.83f},{"lfo8_phase",.4f},{"modenv12_freeX2",.6f}}};
+    const std::array<std::pair<const char*,float>,17> controls{{{"macro8",.71f},{"matrix64_enabled",1.f},{"matrix64_oscillator",.4f},{"matrix64_curve",1.f},{"matrix64_smoothing",.35f},{"modenv12_freeEnabled",1.f},{"modenv12_freeCount",.5f},{"modenv12_freeY2",.73f},{"modenv12_freeCurve1",1.f},{"matrix64_point2",.83f},{"lfo8_phase",.4f},{"modenv12_freeX2",.6f},{"nexusEnabled",1.f},{"nexusX",.3f},{"nexusY",.8f},{"nexusMacroX",.5f},{"nexusCCY",.5f}}};
     for(const auto& c:controls){auto* par=findParameter(*a,c.first);if(!par){matrixRestored=false;continue;}par->beginChangeGesture();par->setValueNotifyingHost(c.second);par->endChangeGesture();}
     juce::MemoryBlock matrixState;a->getStateInformation(matrixState);b->setStateInformation(matrixState.getData(),int(matrixState.getSize()));
     for(const auto& c:controls){auto* x=findParameter(*a,c.first);auto* y=findParameter(*b,c.first);matrixRestored&=x&&y&&std::abs(x->getValue()-y->getValue())<1e-6f;}
@@ -160,6 +160,6 @@ int main(){
     bool imported=qualifyImports();
     auto guiDir=juce::File::getCurrentWorkingDirectory().getChildFile("cosmos-ui-qa");
     bool layout=guiDir.createDirectory().wasOk()&&cosmosTestLayout(*a,guiDir);
-    std::cout<<"Editor geometry and thirty-three screenshots: "<<(layout?"passed":"FAILED")<<'\n';
+    std::cout<<"Editor geometry and thirty-six screenshots: "<<(layout?"passed":"FAILED")<<'\n';
     return failed||!report||!qualified||!imported||!layout?1:0;
 }

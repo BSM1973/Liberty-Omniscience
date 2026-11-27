@@ -10,6 +10,7 @@
 #include "CosmosLFO.h"
 #include "CosmosModEnvelope.h"
 #include "CosmosMatrix.h"
+#include "CosmosNexus.h"
 
 namespace cosmos {
 constexpr int layers = 4, voices = 32;
@@ -25,7 +26,7 @@ struct Layer {
     float filterKey=0,filterVelocity=0,filterDepth=0,filterAttack=.02f,filterDecay=.3f,filterSustain=.5f,filterRelease=.4f;
     Layer(){osc[0].level=1;}
 };
-struct Patch { std::array<Layer,layers> layer{}; std::array<LfoParams,lfoCount> lfo{}; std::array<ModEnvParams,modEnvCount> modEnv{};std::array<MatrixRoute,matrixCount> matrix{};std::array<float,8> macros{}; float master=.7f; double bpm=120.,ppq=0;bool transportValid=false; bool experimentalGrouped=false; bool experimentalTiled=false; int experimentalInterpolation=0; bool experimentalGrainWindow=false; bool experimentalGrainPrepared=false; bool experimentalAnalog=false; bool experimentalEnv=false;bool experimentalMatrixFast=true; };
+struct Patch { std::array<Layer,layers> layer{}; std::array<LfoParams,lfoCount> lfo{}; std::array<ModEnvParams,modEnvCount> modEnv{};std::array<MatrixRoute,matrixCount> matrix{};std::array<float,8> macros{};NexusParams nexus{}; float master=.7f; double bpm=120.,ppq=0;bool transportValid=false; bool experimentalGrouped=false; bool experimentalTiled=false; int experimentalInterpolation=0; bool experimentalGrainWindow=false; bool experimentalGrainPrepared=false; bool experimentalAnalog=false; bool experimentalEnv=false;bool experimentalMatrixFast=true; };
 inline float blep(double p, double dt) noexcept {
     if(dt<=0) return 0;
     if(p<dt){ p/=dt; return float(p+p-p*p-1); }
@@ -107,6 +108,7 @@ class Engine {
     double sr=48000;
     std::uint64_t counter=0;
     std::array<double,lfoCount> freeCycles{};
+    NexusMotion nexusMotion;std::array<float,128> nexusCC{};
     // Allocate the fixed voice pool once, outside the audio callback.
     std::vector<Voice> v = std::vector<Voice>(voices);
     std::array<bool,16> pedal{};
@@ -115,7 +117,7 @@ class Engine {
     std::vector<MidiTable> midiTables=std::vector<MidiTable>(2);
 public:
     void prepare(double rate) noexcept {sr=std::max(8000.,rate);(void)waveBank();(void)hdBank();(void)factoryGrains();(void)hannLut();(void)sineLut();reset();}
-    void reset() noexcept {for(auto& voice:v)voice.reset();pedal={};bend={};midiTables[0]={};channelPressure={};midiTables[1]={};counter=0;freeCycles={};}
+    void reset() noexcept {for(auto& voice:v)voice.reset();pedal={};bend={};midiTables[0]={};channelPressure={};midiTables[1]={};counter=0;freeCycles={};nexusMotion={};nexusCC.fill(-1);}
     void noteOn(int ch,int note,float velocity) noexcept {
       if(ch<0||ch>=16)return;
       if(velocity<=0){noteOff(ch,note);return;}
@@ -134,7 +136,7 @@ public:
       if(ch<0||ch>=16)return;
       pedal[ch]=down;if(!down)for(auto& a:v)if(a.active&&a.channel==ch&&!a.held)a.stop();
     }
-    void controller(int ch,int number,int value)noexcept{if(ch>=0&&ch<16&&number>=0&&number<128)midiTables[0][ch][number]=std::clamp(value,0,127)/127.f;}
+    void controller(int ch,int number,int value)noexcept{if(ch>=0&&ch<16&&number>=0&&number<128){midiTables[0][ch][number]=std::clamp(value,0,127)/127.f;nexusCC[number]=midiTables[0][ch][number];}}
     void pressure(int ch,int value)noexcept{if(ch>=0&&ch<16)channelPressure[ch]=std::clamp(value,0,127)/127.f;}
     void polyAftertouch(int ch,int note,int value)noexcept{if(ch>=0&&ch<16&&note>=0&&note<128)midiTables[1][ch][note]=std::clamp(value,0,127)/127.f;}
     void pitch(int ch,int value) noexcept {if(ch>=0&&ch<16)bend[ch]=2.f*float(value-8192)/8192.f;}
@@ -152,7 +154,9 @@ public:
     std::array<float,matrixCount> matrixValues()const noexcept{for(const auto& a:v)if(a.active)return a.routeView;return {};}
     std::array<float,lfoCount> lfoPhases()const noexcept{for(const auto& a:v)if(a.active)return a.lfoPhaseView;std::array<float,lfoCount> result;result.fill(-1);return result;}
     bool voiceActive(int index)const noexcept{return index>=0&&index<voices&&v[size_t(index)].active;}
-    void render(float* left,float* right,int n,const Patch& patch) noexcept {if(n<=0)return;renderRange(left,right,n,patch,0,voices);for(int i=0;i<lfoCount;++i)if(patch.lfo[i].mode!=0){freeCycles[i]+=n*lfoHz(patch.lfo[i],patch.bpm)/sr;if(freeCycles[i]>=4294967296.)freeCycles[i]-=4294967296.;}}
+    std::array<float,2> nexusPosition()const noexcept{return {nexusMotion.x,nexusMotion.y};}
+    std::array<float,4> nexusGains(bool power)const noexcept{return nexusMotion.weights(power);}
+    void render(float* left,float* right,int n,const Patch& patch) noexcept {if(n<=0)return;renderRange(left,right,n,patch,0,voices);auto target=nexusTarget(patch.nexus,patch.macros,nexusCC);float step=patch.nexus.smooth<=0?1.f:float(1-std::exp(-1000./(sr*patch.nexus.smooth)));for(int j=0;j<n;++j)nexusMotion.tick(target[0],target[1],patch.nexus.enabled?1.f:0.f,step);for(int i=0;i<lfoCount;++i)if(patch.lfo[i].mode!=0){freeCycles[i]+=n*lfoHz(patch.lfo[i],patch.bpm)/sr;if(freeCycles[i]>=4294967296.)freeCycles[i]-=4294967296.;}}
     // Disjoint ranges may be processed concurrently with immutable patch and MIDI state.
     // Caller must join all tasks before modifying MIDI state or reading telemetry.
     void renderRange(float* left,float* right,int n,const Patch& patch,int first,int last) noexcept {
@@ -182,8 +186,10 @@ public:
         double angle=(std::clamp(p.pan,-1.f,1.f)+1)*pi*.25;
         float g=p.enabled?p.gain:0.f;gl[k]=g*float(std::cos(angle));gr[k]=g*float(std::sin(angle));
       }
+      const auto nxTarget=nexusTarget(patch.nexus,patch.macros,nexusCC);const float nxStep=patch.nexus.smooth<=0?1.f:float(1-std::exp(-1000./(sr*patch.nexus.smooth)));const bool nxActive=patch.nexus.enabled||nexusMotion.mix>1e-7f||needed[163]||needed[164];
       for(int voiceIndex=std::max(0,first);voiceIndex<std::min(voices,last);++voiceIndex){
         auto& a=v[size_t(voiceIndex)];if(!a.active)continue;
+        auto nx=nexusMotion;
         a.lfoPhaseView.fill(-1);for(int ri=0;ri<matrixCount;++ri)if(!validRoute(patch.matrix[ri])){a.routeView[ri]=0;a.routeInit[ri]=false;}
         std::array<double,layers> dt{};auto voiceFilters=filters;auto voiceAlpha=alpha;std::array<float,layers> lastRatio{},lastRatioB{},lastResA{},lastResB{};lastResA.fill(-1);lastResB.fill(-1);
         for(int k=0;k<layers;++k)dt[k]=std::clamp(440.*std::exp2((a.note-69+patch.layer[k].tune+bend[a.channel])/12.)/sr,0.,.45);
@@ -204,12 +210,12 @@ public:
           }
           for(int j=0;j<count;++j){
           int i=offset+j;
-          float l=0,r=0;bool alive=false;
+          float l=0,r=0;bool alive=false;std::array<float,4> nxGain{1,1,1,1};if(nxActive){nx.tick(nxTarget[0],nxTarget[1],patch.nexus.enabled?1.f:0.f,nxStep);if(nx.mix>0)nxGain=nx.weights(patch.nexus.power);}
           std::array<std::array<float,matrixDestCount>,layers> modulation{};std::array<float,21> rawValues{};std::array<std::array<std::array<float,6>,oscillatorCount>,layers> oscMod{};std::array<float,lfoCount> nextFeedback{};
           for(int jLfo=0;jLfo<activeCount;++jLfo){int idx=activeLfo[jLfo];const auto& source=patch.lfo[idx];auto raw=source;raw.depth=1;raw.polarity=0;float value;if(source.mode==0){if(i==n-1)a.lfoPhaseView[idx]=float(a.lfo[idx].phase);value=a.lfo[idx].tick(raw,lfoStep[idx]);}else{double cycles=freeCycles[idx]+i*lfoStep[idx];if(source.mode==2&&patch.transportValid&&source.division>0)cycles=patch.ppq*lfoHz(source,patch.bpm)*60/std::clamp(patch.bpm,20.,400.)+i*lfoStep[idx];if(i==n-1)a.lfoPhaseView[idx]=float(cycles-std::floor(cycles));value=lfoAt(raw,cycles);}value=std::clamp(value*std::clamp(1.f+a.lfoFeedback[idx],0.f,2.f),-1.f,1.f);rawValues[idx+1]=.5f+.5f*value;value=(source.polarity?rawValues[idx+1]:value)*source.depth;if(source.destination>0&&source.destination<=8)for(int k=0;k<layers;++k)if(source.layer==0||source.layer==k+1)modulation[k][source.destination-1]+=value;}
           for(int jEnv=0;jEnv<envCount;++jEnv){int idx=activeEnv[jEnv];const auto& source=patch.modEnv[idx];float value=a.modEnv[idx].tick(envPlans[idx],a.velocity);rawValues[9+idx]=value;if(source.destination>0&&source.destination<=8)for(int k=0;k<layers;++k)if(source.layer==0||source.layer==k+1)modulation[k][source.destination-1]+=value*source.depth;}
           for(int route=0;route<routeCount;++route){const auto& m=patch.matrix[routes[route]];float raw=0;
-            if(m.source<=20)raw=rawValues[m.source];else if(m.source==21)raw=a.velocity;else if(m.source==22)raw=std::clamp(a.note/127.f,0.f,1.f);else if(m.source==23)raw=midiTables[0][a.channel][1];else if(m.source==24)raw=channelPressure[a.channel];else if(m.source==25)raw=midiTables[1][a.channel][std::clamp(a.note,0,127)];else if(m.source==26)raw=std::clamp(.5f+bend[a.channel]*.25f,0.f,1.f);else if(m.source<=154)raw=midiTables[0][a.channel][m.source-27];else raw=patch.macros[m.source-155];
+            if(m.source<=20)raw=rawValues[m.source];else if(m.source==21)raw=a.velocity;else if(m.source==22)raw=std::clamp(a.note/127.f,0.f,1.f);else if(m.source==23)raw=midiTables[0][a.channel][1];else if(m.source==24)raw=channelPressure[a.channel];else if(m.source==25)raw=midiTables[1][a.channel][std::clamp(a.note,0,127)];else if(m.source==26)raw=std::clamp(.5f+bend[a.channel]*.25f,0.f,1.f);else if(m.source<=154)raw=midiTables[0][a.channel][m.source-27];else if(m.source<=162)raw=patch.macros[m.source-155];else raw=m.source==163?nx.x:nx.y;
             int ri=routes[route];if(smoothStep[ri]>0){if(!a.routeInit[ri]){a.routeSmooth[ri]=raw;a.routeInit[ri]=true;}else a.routeSmooth[ri]+=smoothStep[ri]*(raw-a.routeSmooth[ri]);raw=a.routeSmooth[ri];}else a.routeInit[ri]=false;
             float value=matrixValue(raw,m);a.routeView[ri]=value;if(m.destination>=13){nextFeedback[m.destination-13]+=value;continue;}int firstLayer=patch.experimentalMatrixFast?layerFirst[ri]:0,endLayer=patch.experimentalMatrixFast?layerEnd[ri]:layers;for(int k=firstLayer;k<endLayer;++k)if(patch.experimentalMatrixFast||m.layer==0||m.layer==k+1){if(m.oscillator>0&&m.destination>=5&&m.destination<=10)oscMod[k][m.oscillator-1][m.destination-5]+=value;else modulation[k][m.destination-1]+=value;}
           }
@@ -246,7 +252,7 @@ public:
             a.low[k]+=voiceAlpha[k]*(x-a.low[k]);
             float filtered=p.filter1.model==0?a.low[k]:a.filters[k][0].tick(x,voiceFilters[k][0]);
             if(p.filter2.model!=1){float second=a.filters[k][1].tick(p.filterParallel?x:filtered,voiceFilters[k][1]);filtered=p.filterParallel?std::lerp(filtered,second,p.filterMix):second;}
-            float s=filtered*p.filterTrim*env;if(modulation[k][2]!=0)s*=std::clamp(1.f+modulation[k][2],0.f,2.f);if(modulation[k][3]!=0){double angle=(std::clamp(p.pan+modulation[k][3],-1.f,1.f)+1)*pi*.25;float gain=p.enabled?p.gain:0.f;l+=s*gain*float(std::cos(angle));r+=s*gain*float(std::sin(angle));}else{l+=s*gl[k];r+=s*gr[k];}
+            float s=filtered*p.filterTrim*env;if(nxActive)s*=nxGain[k];if(modulation[k][2]!=0)s*=std::clamp(1.f+modulation[k][2],0.f,2.f);if(modulation[k][3]!=0){double angle=(std::clamp(p.pan+modulation[k][3],-1.f,1.f)+1)*pi*.25;float gain=p.enabled?p.gain:0.f;l+=s*gain*float(std::cos(angle));r+=s*gain*float(std::sin(angle));}else{l+=s*gl[k];r+=s*gr[k];}
           }
           if(!alive){a.active=false;break;}
           const float g=a.velocity*.12f*patch.master;left[i]+=l*g;right[i]+=r*g;

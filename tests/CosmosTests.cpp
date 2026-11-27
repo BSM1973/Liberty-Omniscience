@@ -420,5 +420,13 @@ int main(){
   for(double bpm:{60.,120.,180.})for(double ppq:{7.25,.125,-.5}){p.bpm=bpm;p.ppq=ppq;e->render(l.data(),r.data(),128,p);double end=ppq+127*bpm/(60*48000);check(std::abs(e->lfoPhases()[0]-(end-std::floor(end)))<1e-5,"transport phase seek and tempo");}
   p.transportValid=false;e->render(l.data(),r.data(),128,p);check(e->lfoPhases()[0]>=0&&e->lfoPhases()[0]<1,"transport fallback");
  }
+ {
+  for(int power:{0,1})for(int x=0;x<=10;++x)for(int y=0;y<=10;++y){auto w=cosmos::nexusWeights(x/10.f,y/10.f,power);float sum=0;for(auto a:w)sum+=power?a*a:a;check(std::abs(sum-1)<1e-6f,"NEXUS gain law");}
+  for(int corner=0;corner<4;++corner){auto w=cosmos::nexusWeights(float(corner%2),corner<2?1.f:0.f,false);for(int j=0;j<4;++j)check(w[j]==float(j==corner),"NEXUS corner isolation");}
+  auto a=std::make_unique<cosmos::Engine>(),b=std::make_unique<cosmos::Engine>();a->prepare(48000);b->prepare(48000);cosmos::Patch dry,wet;for(int j=1;j<4;++j)dry.layer[j].enabled=false;wet=dry;wet.nexus.enabled=true;wet.nexus.x=0;wet.nexus.y=1;wet.nexus.smooth=0;
+  a->noteOn(0,60,.8f);b->noteOn(0,60,.8f);for(int block=0;block<16;++block){std::array<float,128> l{},r{},ll{},rr{};a->render(l.data(),r.data(),128,dry);b->render(ll.data(),rr.data(),128,wet);for(int j=0;j<128;++j)check(l[j]==ll[j]&&r[j]==rr[j],"NEXUS A matches isolated layer");}
+  wet.nexus.macroX=8;wet.macros[7]=.75f;wet.nexus.ccY=74;b->controller(0,74,127);wet.matrix[0]={true,163,3,1,0,.1f};wet.matrix[1]={true,164,3,1,0,.1f};std::array<float,128> l{},r{};b->render(l.data(),r.data(),128,wet);auto v=b->matrixValues();check(std::abs(v[0]-.075f)<1e-6f&&std::abs(v[1]-.1f)<1e-6f,"NEXUS macro MIDI matrix sources");
+  wet.nexus.smooth=100;wet.nexus.macroX=0;wet.nexus.x=0;b->render(l.data(),r.data(),128,wet);check(b->nexusPosition()[0]>.7f&&b->nexusPosition()[0]<.75f,"NEXUS smooth transition");
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }
