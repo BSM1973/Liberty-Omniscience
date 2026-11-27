@@ -166,7 +166,7 @@ public:
       }
       for(int voiceIndex=std::max(0,first);voiceIndex<std::min(voices,last);++voiceIndex){
         auto& a=v[size_t(voiceIndex)];if(!a.active)continue;
-        std::array<double,layers> dt{};auto voiceFilters=filters;auto voiceAlpha=alpha;
+        std::array<double,layers> dt{};auto voiceFilters=filters;auto voiceAlpha=alpha;std::array<float,layers> lastRatio{};
         for(int k=0;k<layers;++k)dt[k]=std::clamp(440.*std::exp2((a.note-69+patch.layer[k].tune+bend[a.channel])/12.)/sr,0.,.45);
         constexpr int tileSize=32;
         std::array<std::array<std::array<float,tileSize>,oscillatorCount>,layers> tile{};
@@ -189,7 +189,7 @@ public:
           for(int k=0;k<layers;++k){
             const auto& p=patch.layer[k];auto& e=a.env[k];
             float fe=a.filterEnv[k].tickPrepared(filterEnvelopes[k]);
-            if(modulated[k]&&(i%16==0)){float oct=p.filterKey*(a.note-60)/12.f+p.filterVelocity*(a.velocity-.5f)*4.f+p.filterDepth*fe;auto fa=p.filter1,fb=p.filter2;float ratio=std::exp2(std::clamp(oct,-10.f,10.f));fa.cutoff=p.cutoff*ratio;fb.cutoff*=ratio;voiceFilters[k][0]=FilterPlan(fa,sr);voiceFilters[k][1]=FilterPlan(fb,sr);voiceAlpha[k]=voiceFilters[k][0].legacyAlpha;}
+            if(modulated[k]&&(i%16==0)){float oct=p.filterKey*(a.note-60)/12.f+p.filterVelocity*(a.velocity-.5f)*4.f+p.filterDepth*fe;auto fa=p.filter1,fb=p.filter2;float ratio=std::exp2(std::clamp(oct,-10.f,10.f));if(ratio!=lastRatio[k]){lastRatio[k]=ratio;fa.cutoff=p.cutoff*ratio;fb.cutoff*=ratio;voiceFilters[k][0]=FilterPlan(fa,sr);voiceFilters[k][1]=FilterPlan(fb,sr);voiceAlpha[k]=voiceFilters[k][0].legacyAlpha;}}
             float env=patch.experimentalEnv?e.tickPrepared(envelopes[k]):e.tick(p,sr);alive|=e.stage!=Env::off;
             if(e.stage==Env::off)continue;
             float x=0;

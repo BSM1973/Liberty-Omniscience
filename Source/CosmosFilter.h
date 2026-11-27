@@ -29,7 +29,7 @@ struct FilterPlan {
     int analogPoles=0;float analogStep=0,feedback=0,analogDrive=1,compensation=1;bool analog=false;
     int spectralCount=0;bool spectralParallel=false,comb=false,combFeedback=false;
     float combGain=0,combDelay=1,combDamping=0,morph=.5f;bool creativeSVF=false,phaser=false;std::array<SpectralBiquad,4> spectral{};
-    bool lpg=false,asymmetric=false,selfResonator=false;float gateAttack=0,gateRelease=0,gateRate=0,rotationCos=1,rotationSin=0,resonatorRadius=0;
+    bool lpg=false,asymmetric=false,selfResonator=false;float gateAttack=0,gateRelease=0,gateRate=0,rotationCos=1,rotationSin=0,resonatorRadius=0,resonatorDamping=.002f;
     FilterPlan()=default;
     FilterPlan(FilterParams p,double sr){
       model=std::clamp(p.model,0,filterModelCount-1);
@@ -52,7 +52,7 @@ struct FilterPlan {
         if(model==71){
           selfResonator=true;double w=6.283185307179586*hz/sr;
           rotationCos=float(std::cos(w));rotationSin=float(std::sin(w));
-          resonatorRadius=float(std::exp((res-.95)*300/sr));return;
+          resonatorRadius=float(std::exp((res-.95)*300/sr));resonatorDamping=float(.002*48000./sr);return;
         }
         if(model<=62){
           spectralCount=4;spectralParallel=true;
@@ -171,7 +171,7 @@ struct FilterState {
         }
         if(p.selfResonator){
           float mag2=resX*resX+resY*resY;
-          float radius=p.resonatorRadius/(1+.002f*mag2);
+          float radius=p.resonatorRadius/(1+p.resonatorDamping*mag2);
           float a=radius*(p.rotationCos*resX-p.rotationSin*resY)+.02f*x;
           float b=radius*(p.rotationSin*resX+p.rotationCos*resY);
           resX=std::clamp(a,-1.f,1.f);resY=std::clamp(b,-1.f,1.f);return resY;

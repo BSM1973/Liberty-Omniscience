@@ -61,6 +61,9 @@ jobs:
             cosmos-filter-quality.csv
             cosmos-filter-response.csv
             cosmos-filter-routing.csv
+            cosmos-filter-summary.csv
+            cosmos-filter-resonance.csv
+            cosmos-filter-alias-probe.csv
           if-no-files-found: warn
       - name: DSP benchmark
         shell: bash
@@ -116,12 +119,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
         with:
-          name: Omniscience-v0.4.5-macOS-ARM64
+          name: Omniscience-v0.4.6-macOS-ARM64
           path: Omniscience-macOS-ARM64.zip
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
-          name: Omniscience-v0.4.5-Windows-x64
+          name: Omniscience-v0.4.6-Windows-x64
           path: Omniscience-Windows-x64.zip
           if-no-files-found: error

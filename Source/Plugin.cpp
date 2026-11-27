@@ -378,7 +378,7 @@ public:
     }
     void paint(juce::Graphics& g)override{
       g.fillAll(juce::Colour(0xff0b131e));g.setColour(juce::Colour(0xff40566f));g.drawRect(getLocalBounds());
-      g.setFont(11);g.setColour(light);g.drawText("Réponse (petit signal) — glisser : A / Maj + glisser : B",12,2,getWidth()-24,17,juce::Justification::centredLeft);
+      g.setFont(11);g.setColour(light);g.drawText("Réponse impulsionnelle — glisser : A / Maj + glisser : B",12,2,getWidth()-24,17,juce::Justification::centredLeft);
       auto bounds=getLocalBounds().toFloat().reduced(12);bounds.removeFromTop(14);bounds.removeFromBottom(14);
       auto y=[&](float db){return bounds.getY()+(24-db)/84*bounds.getHeight();};
       for(int db:{0,-12,-24,-36,-48,-60}){g.setColour(juce::Colour(0xff2d4053));g.drawHorizontalLine(int(y(float(db))),bounds.getX(),bounds.getRight());}
@@ -386,7 +386,7 @@ public:
         double maximum=std::min(20000.,std::max(8000.,rate)*.45);if(hz>maximum)continue;
         float x=bounds.getX()+bounds.getWidth()*float(std::log(hz/20)/std::log(maximum/20));
         g.setColour(juce::Colour(0xff304559));g.drawVerticalLine(int(x),bounds.getY(),bounds.getBottom());
-        g.setColour(juce::Colour(0xff9ab6ce));g.setFont(10);g.drawText(hz>=1000?juce::String(int(hz/1000))+"k":juce::String(int(hz)),int(x)-18,int(bounds.getBottom())+1,36,12,juce::Justification::centred);
+        g.setColour(juce::Colour(0xff9ab6ce));g.setFont(10);g.drawText(hz>=1000?juce::String(int(hz/1000))+"k":juce::String(int(hz)),juce::jlimit(0,std::max(0,getWidth()-36),int(x)-18),int(bounds.getBottom())+1,36,12,juce::Justification::centred);
       }
       for(int k=0;k<2;++k){juce::Path path;for(int i=0;i<96;++i){float x=bounds.getX()+bounds.getWidth()*i/95.f;if(i==0)path.startNewSubPath(x,y(curves[k][i]));else path.lineTo(x,y(curves[k][i]));}g.setColour(k==0?cyan:juce::Colour(0xffe5b16d));g.strokePath(path,juce::PathStrokeType(1.7f));}
     }
@@ -579,7 +579,7 @@ public:
     g.setColour(cyan);g.setFont(17);g.drawText("BIBLIOTHÈQUE  /  270",25,162,242,28,juce::Justification::centred);
     g.setColour(juce::Colour(0xff35495e));if(!oscPage&&!filterPage)for(int j=0;j<8;++j)g.drawRoundedRectangle(310.f+216.f*(j%4),316.f+180.f*(j/4),204.f,168.f,6.f,1.f);
     if(oscPage)for(int j=0;j<10;++j)g.drawRoundedRectangle(310.f+172.f*(j%5),449.f+132.f*(j/5),164.f,126.f,6.f,1.f);
-    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.4.5  FILTER PROFESSIONAL QUALITY CONTROL  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
+    g.setColour(juce::Colour(0xff9ab6ce));g.setFont(13);g.drawText("v0.4.6  FILTER MASTER VALIDATION  •  4 couches / 20 oscillateurs / 32 voix",18,733,1155,24,juce::Justification::centredRight);
   }
   void resized()override{
     canvas.setTransform(juce::AffineTransform::scale(float(getWidth())/1200.f));canvas.setBounds(0,0,1200,760);

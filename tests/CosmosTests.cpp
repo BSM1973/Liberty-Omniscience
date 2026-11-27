@@ -305,5 +305,20 @@ int main(){
     double c=std::cos(2*cosmos::pi*18000*j/48000),s=std::sin(2*cosmos::pi*18000*j/48000);ar+=a*c;ai+=a*s;dr+=d*c;di+=d*s;}
   check(std::hypot(ar,ai)<std::hypot(dr,di),"ADAA reduces selected folded third harmonic");
  }
+ {
+  double minRms=1e9,maxRms=0;
+  for(double sr:{44100.,48000.,96000.}){
+    cosmos::FilterState st;cosmos::FilterPlan p({71,440,1,0},sr);double sum=0;
+    for(int j=0;j<int(sr*2);++j){float y=st.tick(j==0?.5f:0.f,p);if(j>=int(sr))sum+=double(y)*y;}
+    double rms=std::sqrt(sum/int(sr));minRms=std::min(minRms,rms);maxRms=std::max(maxRms,rms);
+  }
+  check(minRms>.1&&maxRms/minRms<1.03,"self resonator steady amplitude across sample rates");
+  for(int model:{26,27,28,29,49,50}){
+    cosmos::FilterState used,fresh;cosmos::FilterPlan p({model,330,.9f,0},48000);
+    for(int j=0;j<10000;++j)used.tick(.2f,p);
+    used.reset();
+    for(int j=0;j<10000;++j){float x=j==0?.4f:0.f;check(used.tick(x,p)==fresh.tick(x,p),"comb reset no stale history");}
+  }
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }
