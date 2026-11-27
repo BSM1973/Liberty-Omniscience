@@ -373,5 +373,16 @@ int main(){
     double diff=0;for(int block=0;block<100;++block){std::array<float,128> l{},r{},ll{},rr{};a->render(l.data(),r.data(),128,dry);b->render(ll.data(),rr.data(),128,wet);for(int j=0;j<128;++j)diff+=std::abs(l[j]-ll[j]);}check(diff>.001,"matrix source active without direct route");
   }
  }
+ {
+  cosmos::MatrixRoute r{true,155,3,1,1,1};r.curve=1;
+  check(std::abs(cosmos::matrixValue(.25f,r)+.25f)<1e-6f,"signed curve");r.curve=2;check(std::abs(cosmos::matrixValue(.625f,r)-.5f)<1e-6f,"root curve");
+  auto a=std::make_unique<cosmos::Engine>(),b=std::make_unique<cosmos::Engine>();a->prepare(48000);b->prepare(48000);cosmos::Patch dry,wet;
+  for(int k=1;k<4;++k){dry.layer[k].enabled=false;wet.layer[k].enabled=false;}
+  dry.layer[0].osc[1].level=.6f;wet=dry;wet.macros[7]=1;wet.matrix[63]={true,162,5,1,0,1,2,0,0};
+  a->noteOn(0,60,.8f);b->noteOn(0,60,.8f);double diff=0;
+  for(int block=0;block<50;++block){std::array<float,128> l{},r{},ll{},rr{};a->render(l.data(),r.data(),128,dry);b->render(ll.data(),rr.data(),128,wet);for(int j=0;j<128;++j){check(std::isfinite(ll[j]),"macro target finite");diff+=std::abs(ll[j]-l[j]);}}
+  check(diff>.01&&std::abs(b->matrixValues()[63]-1)<1e-6f,"macro 8 target oscillator 2 and telemetry");
+  b->prepare(48000);wet=dry;wet.matrix[0]={true,23,3,1,0,1,0,0,50};b->noteOn(0,60,.8f);std::array<float,128> l{},rr{};b->render(l.data(),rr.data(),128,wet);b->controller(0,1,127);b->render(l.data(),rr.data(),128,wet);auto sm=b->matrixValues()[0];check(sm>0&&sm<.1f,"MIDI smoothing actual");for(int j=0;j<200;++j)b->render(l.data(),rr.data(),128,wet);check(b->matrixValues()[0]>.99f,"MIDI smoothing converges");
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }

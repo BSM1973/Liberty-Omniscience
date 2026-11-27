@@ -25,7 +25,7 @@ struct Layer {
     float filterKey=0,filterVelocity=0,filterDepth=0,filterAttack=.02f,filterDecay=.3f,filterSustain=.5f,filterRelease=.4f;
     Layer(){osc[0].level=1;}
 };
-struct Patch { std::array<Layer,layers> layer{}; std::array<LfoParams,lfoCount> lfo{}; std::array<ModEnvParams,modEnvCount> modEnv{};std::array<MatrixRoute,matrixCount> matrix{}; float master=.7f; double bpm=120.,ppq=0;bool transportValid=false; bool experimentalGrouped=false; bool experimentalTiled=false; int experimentalInterpolation=0; bool experimentalGrainWindow=false; bool experimentalGrainPrepared=false; bool experimentalAnalog=false; bool experimentalEnv=false; };
+struct Patch { std::array<Layer,layers> layer{}; std::array<LfoParams,lfoCount> lfo{}; std::array<ModEnvParams,modEnvCount> modEnv{};std::array<MatrixRoute,matrixCount> matrix{};std::array<float,8> macros{}; float master=.7f; double bpm=120.,ppq=0;bool transportValid=false; bool experimentalGrouped=false; bool experimentalTiled=false; int experimentalInterpolation=0; bool experimentalGrainWindow=false; bool experimentalGrainPrepared=false; bool experimentalAnalog=false; bool experimentalEnv=false; };
 inline float blep(double p, double dt) noexcept {
     if(dt<=0) return 0;
     if(p<dt){ p/=dt; return float(p+p-p*p-1); }
@@ -98,8 +98,9 @@ struct Voice {
     std::array<std::array<FilterState,2>,layers> filters{};
     std::array<Env,layers> env{},filterEnv{};
     std::array<LfoState,lfoCount> lfo{};std::array<ModEnvState,modEnvCount> modEnv{};
+    std::array<float,matrixCount> routeSmooth{},routeView{};std::array<bool,matrixCount> routeInit{};std::array<float,lfoCount> lfoFeedback{};
     std::array<std::array<HybridVoice,oscillatorCount>,layers> hybrid{};
-    void reset() noexcept {active=held=false;note=channel=0;velocity=0;age=0;phase={};low={};env={};filterEnv={};lfo={};modEnv={};hybrid={};for(auto& pair:filters)for(auto& f:pair)f.reset();}
+    void reset() noexcept {active=held=false;note=channel=0;velocity=0;age=0;phase={};low={};env={};filterEnv={};lfo={};modEnv={};routeSmooth={};routeView={};routeInit={};lfoFeedback={};hybrid={};for(auto& pair:filters)for(auto& f:pair)f.reset();}
     void stop() noexcept {held=false;for(auto& e:env)e.stop();for(auto& e:filterEnv)e.stop();for(auto& e:modEnv)e.stop();}
 };
 class Engine {
@@ -148,6 +149,7 @@ public:
       }
       return out;
     }
+    std::array<float,matrixCount> matrixValues()const noexcept{for(const auto& a:v)if(a.active)return a.routeView;return {};}
     bool voiceActive(int index)const noexcept{return index>=0&&index<voices&&v[size_t(index)].active;}
     void render(float* left,float* right,int n,const Patch& patch) noexcept {if(n<=0)return;renderRange(left,right,n,patch,0,voices);for(int i=0;i<lfoCount;++i)if(patch.lfo[i].mode!=0){freeCycles[i]+=n*lfoHz(patch.lfo[i],patch.bpm)/sr;if(freeCycles[i]>=4294967296.)freeCycles[i]-=4294967296.;}}
     // Disjoint ranges may be processed concurrently with immutable patch and MIDI state.
@@ -159,8 +161,8 @@ public:
       std::array<float,layers> alpha{},gl{},gr{};
       std::array<EnvPlan,layers> envelopes{},filterEnvelopes{};
       std::array<bool,layers> modulated{},lfoCutoff{},lfoOsc{};std::array<int,lfoCount> activeLfo{};std::array<double,lfoCount> lfoStep{};int activeCount=0;
-      std::array<int,matrixCount> routes{};std::array<bool,matrixSourceCount> needed{};int routeCount=0;
-      for(int i=0;i<matrixCount;++i){const auto& m=patch.matrix[i];if(!validRoute(m))continue;routes[routeCount++]=i;needed[m.source]=true;for(int k=0;k<layers;++k)if(m.layer==0||m.layer==k+1){if(m.destination<=2||m.destination>=11)lfoCutoff[k]=true;if(m.destination>=5&&m.destination<=10)lfoOsc[k]=true;}}
+      std::array<int,matrixCount> routes{};std::array<bool,matrixSourceCount> needed{};int routeCount=0;std::array<float,matrixCount> smoothStep{};std::array<bool,layers> individualOsc{};
+      for(int i=0;i<matrixCount;++i){const auto& m=patch.matrix[i];if(!validRoute(m))continue;routes[routeCount++]=i;needed[m.source]=true;if(m.destination>=13)needed[m.destination-12]=true;if(m.smoothing>0&&m.source>=23&&m.source<=154)smoothStep[i]=float(1-std::exp(-1./(sr*m.smoothing*.001)));for(int k=0;k<layers;++k)if(m.layer==0||m.layer==k+1){if(m.destination<=2||(m.destination>=11&&m.destination<=12))lfoCutoff[k]=true;if(m.destination>=5&&m.destination<=10){lfoOsc[k]=true;if(m.oscillator>0)individualOsc[k]=true;}}}
       for(int i=0;i<lfoCount;++i){const auto& l=patch.lfo[i];if((l.destination<=0||l.destination>8||l.depth==0)&&!needed[i+1])continue;activeLfo[activeCount++]=i;lfoStep[i]=lfoHz(l,patch.bpm)/sr;if(l.destination==1||l.destination==2)for(int k=0;k<layers;++k)if(l.layer==0||l.layer==k+1)lfoCutoff[k]=true;if(l.destination>=5)for(int k=0;k<layers;++k)if(l.layer==0||l.layer==k+1)lfoOsc[k]=true;}
       std::array<ModEnvPlan,modEnvCount> envPlans{};std::array<int,modEnvCount> activeEnv{};int envCount=0;
       for(int i=0;i<modEnvCount;++i){const auto& m=patch.modEnv[i];if((m.destination<=0||m.destination>8||m.depth==0)&&!needed[9+i])continue;auto raw=m;raw.depth=1;envPlans[i]=ModEnvPlan(raw,sr,patch.bpm);activeEnv[envCount++]=i;for(int k=0;k<layers;++k)if(m.layer==0||m.layer==k+1){if(m.destination<=2)lfoCutoff[k]=true;if(m.destination>=5)lfoOsc[k]=true;}}
@@ -181,6 +183,7 @@ public:
       }
       for(int voiceIndex=std::max(0,first);voiceIndex<std::min(voices,last);++voiceIndex){
         auto& a=v[size_t(voiceIndex)];if(!a.active)continue;
+        for(int ri=0;ri<matrixCount;++ri)if(!validRoute(patch.matrix[ri])){a.routeView[ri]=0;a.routeInit[ri]=false;}
         std::array<double,layers> dt{};auto voiceFilters=filters;auto voiceAlpha=alpha;std::array<float,layers> lastRatio{},lastRatioB{},lastResA{},lastResB{};lastResA.fill(-1);lastResB.fill(-1);
         for(int k=0;k<layers;++k)dt[k]=std::clamp(440.*std::exp2((a.note-69+patch.layer[k].tune+bend[a.channel])/12.)/sr,0.,.45);
         constexpr int tileSize=32;
@@ -201,13 +204,15 @@ public:
           for(int j=0;j<count;++j){
           int i=offset+j;
           float l=0,r=0;bool alive=false;
-          std::array<std::array<float,matrixDestCount>,layers> modulation{};std::array<float,matrixSourceCount> rawValues{};
-          for(int jLfo=0;jLfo<activeCount;++jLfo){int idx=activeLfo[jLfo];const auto& source=patch.lfo[idx];auto raw=source;raw.depth=1;raw.polarity=0;float value;if(source.mode==0)value=a.lfo[idx].tick(raw,lfoStep[idx]);else{double cycles=freeCycles[idx]+i*lfoStep[idx];if(source.mode==2&&patch.transportValid&&source.division>0)cycles=patch.ppq*lfoHz(source,patch.bpm)*60/std::clamp(patch.bpm,20.,400.)+i*lfoStep[idx];value=lfoAt(raw,cycles);}rawValues[idx+1]=.5f+.5f*value;value=(source.polarity?rawValues[idx+1]:value)*source.depth;if(source.destination>0&&source.destination<=8)for(int k=0;k<layers;++k)if(source.layer==0||source.layer==k+1)modulation[k][source.destination-1]+=value;}
+          std::array<std::array<float,matrixDestCount>,layers> modulation{};std::array<float,matrixSourceCount> rawValues{};std::array<std::array<std::array<float,6>,oscillatorCount>,layers> oscMod{};std::array<float,lfoCount> nextFeedback{};
+          for(int jLfo=0;jLfo<activeCount;++jLfo){int idx=activeLfo[jLfo];const auto& source=patch.lfo[idx];auto raw=source;raw.depth=1;raw.polarity=0;float value;if(source.mode==0)value=a.lfo[idx].tick(raw,lfoStep[idx]);else{double cycles=freeCycles[idx]+i*lfoStep[idx];if(source.mode==2&&patch.transportValid&&source.division>0)cycles=patch.ppq*lfoHz(source,patch.bpm)*60/std::clamp(patch.bpm,20.,400.)+i*lfoStep[idx];value=lfoAt(raw,cycles);}value=std::clamp(value*std::clamp(1.f+a.lfoFeedback[idx],0.f,2.f),-1.f,1.f);rawValues[idx+1]=.5f+.5f*value;value=(source.polarity?rawValues[idx+1]:value)*source.depth;if(source.destination>0&&source.destination<=8)for(int k=0;k<layers;++k)if(source.layer==0||source.layer==k+1)modulation[k][source.destination-1]+=value;}
           for(int jEnv=0;jEnv<envCount;++jEnv){int idx=activeEnv[jEnv];const auto& source=patch.modEnv[idx];float value=a.modEnv[idx].tick(envPlans[idx],a.velocity);rawValues[9+idx]=value;if(source.destination>0&&source.destination<=8)for(int k=0;k<layers;++k)if(source.layer==0||source.layer==k+1)modulation[k][source.destination-1]+=value*source.depth;}
           for(int route=0;route<routeCount;++route){const auto& m=patch.matrix[routes[route]];float raw=0;
-            if(m.source<=20)raw=rawValues[m.source];else if(m.source==21)raw=a.velocity;else if(m.source==22)raw=std::clamp(a.note/127.f,0.f,1.f);else if(m.source==23)raw=midiTables[0][a.channel][1];else if(m.source==24)raw=channelPressure[a.channel];else if(m.source==25)raw=midiTables[1][a.channel][std::clamp(a.note,0,127)];else if(m.source==26)raw=std::clamp(.5f+bend[a.channel]*.25f,0.f,1.f);else if(m.source>=27)raw=midiTables[0][a.channel][m.source-27];
-            float value=matrixValue(raw,m);for(int k=0;k<layers;++k)if(m.layer==0||m.layer==k+1)modulation[k][m.destination-1]+=value;
+            if(m.source<=20)raw=rawValues[m.source];else if(m.source==21)raw=a.velocity;else if(m.source==22)raw=std::clamp(a.note/127.f,0.f,1.f);else if(m.source==23)raw=midiTables[0][a.channel][1];else if(m.source==24)raw=channelPressure[a.channel];else if(m.source==25)raw=midiTables[1][a.channel][std::clamp(a.note,0,127)];else if(m.source==26)raw=std::clamp(.5f+bend[a.channel]*.25f,0.f,1.f);else if(m.source<=154)raw=midiTables[0][a.channel][m.source-27];else raw=patch.macros[m.source-155];
+            int ri=routes[route];if(smoothStep[ri]>0){if(!a.routeInit[ri]){a.routeSmooth[ri]=raw;a.routeInit[ri]=true;}else a.routeSmooth[ri]+=smoothStep[ri]*(raw-a.routeSmooth[ri]);raw=a.routeSmooth[ri];}else a.routeInit[ri]=false;
+            float value=matrixValue(raw,m);a.routeView[ri]=value;if(m.destination>=13){nextFeedback[m.destination-13]+=value;continue;}for(int k=0;k<layers;++k)if(m.layer==0||m.layer==k+1){if(m.oscillator>0&&m.destination>=5&&m.destination<=10)oscMod[k][m.oscillator-1][m.destination-5]+=value;else modulation[k][m.destination-1]+=value;}
           }
+          a.lfoFeedback=nextFeedback;
           for(int k=0;k<layers;++k){
             const auto& p=patch.layer[k];auto& e=a.env[k];
             float fe=a.filterEnv[k].tickPrepared(filterEnvelopes[k]);
@@ -216,17 +221,20 @@ public:
             if(e.stage==Env::off)continue;
             float x=0;
             double pitchDt=dt[k];if(modulation[k][4]!=0)pitchDt=std::clamp(pitchDt*std::exp2(std::clamp(double(modulation[k][4]),-4.,4.)),0.,.45);
+            auto pitchFor=[&](int o){float v=oscMod[k][o][0];return v==0?pitchDt:std::clamp(dt[k]*std::exp2(std::clamp(double(modulation[k][4]+v),-4.,4.)),0.,.45);};
             auto renderOsc=[&](int o){const auto& base=prepared[k][o];if(tiled[k][o])return tile[k][o][j];
-              if(((base.mode==OscMode::fm||base.mode==OscMode::am)&&(modulation[k][8]!=0||modulation[k][9]!=0))||(base.mode==OscMode::wavetable&&modulation[k][5]!=0)||(base.mode==OscMode::granular&&(modulation[k][6]!=0||modulation[k][7]!=0))){
-                auto m=base;if(m.mode==OscMode::fm||m.mode==OscMode::am){m.depth=std::clamp(m.depth+modulation[k][8],0.f,1.f);m.ratio=std::clamp(m.ratio*std::exp2(std::clamp(modulation[k][9],-3.f,3.f)),.125f,16.f);}else if(m.mode==OscMode::wavetable)m.morph=std::clamp(m.morph+modulation[k][5]*.5f,0.f,1.f);
-                else {m.grain.position=std::clamp(m.grain.position+modulation[k][6]*.5f,0.f,1.f);m.grain.density=std::clamp(m.grain.density*std::exp2(std::clamp(modulation[k][7],-3.f,3.f)),1.f,80.f);}
-                return renderHybrid(a.hybrid[k][o],m,sources[k][o],pitchDt,sr,analog,patch.bpm);
+              auto mod=[&](int d){return modulation[k][d]+oscMod[k][o][d-4];};
+              double localPitch=pitchFor(o);
+              if(((base.mode==OscMode::fm||base.mode==OscMode::am)&&(mod(8)!=0||mod(9)!=0))||(base.mode==OscMode::wavetable&&mod(5)!=0)||(base.mode==OscMode::granular&&(mod(6)!=0||mod(7)!=0))){
+                auto m=base;if(m.mode==OscMode::fm||m.mode==OscMode::am){m.depth=std::clamp(m.depth+mod(8),0.f,1.f);m.ratio=std::clamp(m.ratio*std::exp2(std::clamp(mod(9),-3.f,3.f)),.125f,16.f);}else if(m.mode==OscMode::wavetable)m.morph=std::clamp(m.morph+mod(5)*.5f,0.f,1.f);
+                else {m.grain.position=std::clamp(m.grain.position+mod(6)*.5f,0.f,1.f);m.grain.density=std::clamp(m.grain.density*std::exp2(std::clamp(mod(7),-3.f,3.f)),1.f,80.f);}
+                return renderHybrid(a.hybrid[k][o],m,sources[k][o],localPitch,sr,analog,patch.bpm);
               }
-              return renderHybrid(a.hybrid[k][o],base,sources[k][o],pitchDt,sr,analog,patch.bpm);
+              return renderHybrid(a.hybrid[k][o],base,sources[k][o],localPitch,sr,analog,patch.bpm);
             };
             if(legacy(p.osc[0])){
-              x=analog(p.wave,a.phase[k],pitchDt);
-              a.phase[k]+=pitchDt;if(a.phase[k]>=1)a.phase[k]-=1;
+              double localPitch=pitchFor(0);x=analog(p.wave,a.phase[k],localPitch);
+              a.phase[k]+=localPitch;if(a.phase[k]>=1)a.phase[k]-=1;
               a.hybrid[k][0].phase[0]=a.phase[k];
             }else{
               x=renderOsc(0);

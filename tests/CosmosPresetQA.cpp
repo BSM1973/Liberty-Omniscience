@@ -147,10 +147,17 @@ int main(){
         if(!ok){++failed;std::cerr<<"Preset "<<i+1<<" failed\n";}
     }
     std::cout<<270-failed<<"/270 presets passed automated DSP/state checks\n";
-    bool qualified=qualifyProcessor(*a,*b,*ma,*mb);
+    auto findParameter=[](juce::AudioProcessor& p,const juce::String& key)->juce::AudioProcessorParameter*{for(auto* x:p.getParameters())if(auto* id=dynamic_cast<juce::AudioProcessorParameterWithID*>(x))if(id->paramID==key)return x;return nullptr;};
+    bool matrixRestored=true;a->setCurrentProgram(0);b->setCurrentProgram(0);
+    const std::array<std::pair<const char*,float>,5> controls{{{"macro8",.71f},{"matrix64_enabled",1.f},{"matrix64_oscillator",.4f},{"matrix64_curve",1.f},{"matrix64_smoothing",.35f}}};
+    for(const auto& c:controls){auto* par=findParameter(*a,c.first);if(!par){matrixRestored=false;continue;}par->beginChangeGesture();par->setValueNotifyingHost(c.second);par->endChangeGesture();}
+    juce::MemoryBlock matrixState;a->getStateInformation(matrixState);b->setStateInformation(matrixState.getData(),int(matrixState.getSize()));
+    for(const auto& c:controls){auto* x=findParameter(*a,c.first);auto* y=findParameter(*b,c.first);matrixRestored&=x&&y&&std::abs(x->getValue()-y->getValue())<1e-6f;}
+    std::cout<<"Macro and extended matrix state: "<<(matrixRestored?"passed":"FAILED")<<'\n';
+    bool qualified=matrixRestored&&qualifyProcessor(*a,*b,*ma,*mb);
     bool imported=qualifyImports();
     auto guiDir=juce::File::getCurrentWorkingDirectory().getChildFile("cosmos-ui-qa");
     bool layout=guiDir.createDirectory().wasOk()&&cosmosTestLayout(*a,guiDir);
-    std::cout<<"Editor geometry and twenty-four screenshots: "<<(layout?"passed":"FAILED")<<'\n';
+    std::cout<<"Editor geometry and twenty-seven screenshots: "<<(layout?"passed":"FAILED")<<'\n';
     return failed||!report||!qualified||!imported||!layout?1:0;
 }
