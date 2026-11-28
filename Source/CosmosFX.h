@@ -82,7 +82,7 @@ struct FxSpaceState{
    }
    push(in[0]+(type==33?.65f*b*feedback[0]:0),in[1]+(type==33?.65f*b*feedback[1]:0));
   }else if(type>=35&&type<=38){
-    int poles=type==35?4:type==36?8:type==37?12:4;for(int c=0;c<2;++c){float x=in[c]+.55f*b*feedback[c];for(int j=0;j<poles;++j){float freq=std::min(float(sr*.4),150.f*std::exp2((.5f+.5f*s[c])*4+(type==38?j*.36f:0)));float g=std::tan(float(std::numbers::pi_v<double>*freq/sr)),k=(1-g)/(1+g);float y=ap[c][j]-k*x;ap[c][j]=x+k*y;x=y;}feedback[c]=x;out[c]=.5f*(in[c]+x);}
+    int poles=type==35?4:type==36?8:type==37?12:4;for(int c=0;c<2;++c){float x=in[c]+.55f*b*feedback[c];const float base=150.f*std::exp2((.5f+.5f*s[c])*4);auto coefficient=[&](float f){float g=std::tan(float(std::numbers::pi_v<double>*std::min(float(sr*.4),f)/sr));return (1-g)/(1+g);};const float shared=coefficient(base);for(int j=0;j<poles;++j){float k=type==38&&j?coefficient(base*std::exp2(j*.36f)):shared;float y=ap[c][j]-k*x;ap[c][j]=x+k*y;x=y;}feedback[c]=x;out[c]=.5f*(in[c]+x);}
   }else if(type==39){for(int c=0;c<2;++c){float f=.5f+.5f*s[c];lp[c]+=.08f*(in[c]-lp[c]);out[c]=(lp[c]*(.8f+.2f*f)+(in[c]-lp[c])*(.35f+.65f*f))*(1-b*.65f+b*.65f*f);}}
   else if(type==41){float pan=b*s[0];out[0]=in[0]*std::sqrt(1-pan);out[1]=in[1]*std::sqrt(1+pan);}
   else if(type==42){for(int c=0;c<2;++c)out[c]=in[c]*std::lerp(1.f,s[c],b);hz=10+990*a;}
@@ -220,7 +220,7 @@ struct ReverbState{
  std::array<std::vector<float>,2> early,pitch;
  std::array<float,lines> damp{},scatter{},length{};
  int write=0,valid=0,earlyWrite=0,earlyValid=0,pitchWrite=0,pitchValid=0,grainPos=0;
- float phase=0,freeze=0,gate=0,gateHold=0,activity=0,shimmerPhase=0;
+ float phase=0,freeze=0,gate=0,gateHold=0,activity=0,shimmerPhase=0;std::array<float,2> shimmerLow{},shimmerDC{};
  void prepare(double sr=48000){
   const auto n=size_t(std::ceil(std::max(8000.,sr)*.18))+8;
   for(auto& x:tank)x.resize(n);
@@ -228,7 +228,7 @@ struct ReverbState{
   for(auto& x:pitch)x.resize(size_t(std::ceil(std::max(8000.,sr)*.065))+8);
   reset();
  }
- void reset()noexcept{write=valid=earlyWrite=earlyValid=pitchWrite=pitchValid=grainPos=0;phase=freeze=gate=gateHold=activity=shimmerPhase=0;damp={};scatter={};length={};}
+ void reset()noexcept{write=valid=earlyWrite=earlyValid=pitchWrite=pitchValid=grainPos=0;phase=freeze=gate=gateHold=activity=shimmerPhase=0;damp={};scatter={};length={};shimmerLow={};shimmerDC={};}
  static float read(const std::vector<float>& buf,int w,int v,float samples)noexcept{
   const int n=int(buf.size());if(n<4)return 0;
   samples=std::clamp(samples,1.f,float(n-2));const int k=int(samples);const float f=samples-k;
@@ -277,7 +277,7 @@ struct ReverbState{
    excite[c]=.72f*in[c]+.28f*erOut[c];
    if(type==74){int span=std::max(16,int(rate*.075f)&~1);excite[c]=grain(c,2.f,span,2.f);}
    if(type==77){int span=std::max(16,int(rate*.038f)&~1);excite[c]=.55f*excite[c]+.45f*grain(c,rate*.013f,span,.65f);}
-   if(type==73)excite[c]+=.16f*octave(c,rate)*(1-freeze);
+   if(type==73){float shifted=octave(c,rate);shimmerLow[c]+=(1-std::exp(-6.2831853f*std::min(rate*.42f,8500.f)/rate))*(shifted-shimmerLow[c]);shimmerDC[c]+=(1-std::exp(-6.2831853f*120.f/rate))*(shimmerLow[c]-shimmerDC[c]);excite[c]+=.16f*(shimmerLow[c]-shimmerDC[c])*(1-freeze);}
    if(type==71){float x=excite[c];float z=read(early[c],earlyWrite,earlyValid,rate*.0027f);excite[c]=.65f*x+.35f*(z-read(early[c],earlyWrite,earlyValid,rate*.0061f));}
   }
   std::array<float,lines> taps{},feedback{};
@@ -319,14 +319,15 @@ struct ReverbState{
 };
 
 struct FxSlotState{
- int type=0;float wet=0;std::array<float,2> low{},dc{},env{};float phase=0,reduction=0;std::array<float,2> low2{},previous{},fastEnv{},slowEnv{};std::array<float,3> bandEnv{};float linkedEnv=0;FxSpaceState space;EchoState echo;ReverbState reverb;CreativeState creative;FxAlignment dryAlign,parallelAlign;int spectralLatency=0;FxFIR fir;int firQuality=0;
+ int type=0;float wet=0;std::array<float,2> low{},dc{},env{};float phase=0,reduction=0;std::array<float,2> low2{},previous{},fastEnv{},slowEnv{};std::array<float,3> bandEnv{};float linkedEnv=0;FxSpaceState space;EchoState echo;ReverbState reverb;CreativeState creative;FxAlignment dryAlign,parallelAlign;int spectralLatency=0;FxFIR fir;int firQuality=0;std::array<float,2> lastOut{},transitionFrom{};int transition=0,transitionLength=0;
  void prepare(double sr=48000){(void)FxFIR::plans();space.prepare();echo.prepare(sr);reverb.prepare(sr);creative.prepare(sr);dryAlign.prepare(4096);parallelAlign.prepare(4096);clear();wet=0;type=0;}
  void reset()noexcept{clear();parallelAlign.reset();wet=0;type=0;}
- void clear()noexcept{low={};dc={};env={};low2={};previous={};fastEnv={};slowEnv={};bandEnv={};linkedEnv=0;phase=0;reduction=0;space.reset();echo.reset();reverb.reset();creative.reset();dryAlign.reset();spectralLatency=0;fir.reset();firQuality=0;}
+ void clear()noexcept{low={};dc={};env={};low2={};previous={};fastEnv={};slowEnv={};bandEnv={};linkedEnv=0;phase=0;reduction=0;space.reset();echo.reset();reverb.reset();creative.reset();dryAlign.reset();spectralLatency=0;fir.reset();firQuality=0;transition=transitionLength=0;lastOut={};transitionFrom={};}
+ size_t allocatedBytes()const noexcept{size_t n=sizeof(*this);auto add=[&](const auto& x){for(const auto& v:x)n+=v.capacity()*sizeof(float);};add(space.delay);add(echo.ring);add(reverb.tank);add(reverb.early);add(reverb.pitch);add(creative.ring);add(dryAlign.ring);add(parallelAlign.ring);n+=creative.spectral.channels.capacity()*sizeof(CreativeFFT::Channel);return n;}
  bool active(const FxParams& p)const noexcept{return (p.enabled&&p.type>0)||wet>0;}
  void tick(float& l,float& r,const FxParams& p,double sr,const std::array<float,8>& macros)noexcept{
   const int desired=p.enabled?std::clamp(p.type,0,fxTypes-1):0;const int latency=fxLatency(p);
-  if(latency>0){if(type!=desired||spectralLatency!=latency){clear();type=desired;spectralLatency=latency;wet=0;}}
+  if(latency>0){if(type!=desired||spectralLatency!=latency){bool change=type==desired&&spectralLatency>0&&spectralLatency!=latency;auto prev=lastOut;clear();type=desired;spectralLatency=latency;wet=0;if(change){transitionFrom=prev;transition=transitionLength=std::max(1,int(sr*.005));}}}
   else if(spectralLatency>0){clear();type=desired;wet=0;}
   if(!active(p)){reduction=0;return;}
   if(type!=desired&&wet<=0){type=desired;clear();}
@@ -369,7 +370,7 @@ struct FxSlotState{
    default:break;
   }}
   if(latency)dryAlign.tick(dry[0],dry[1],latency);
-  l=std::lerp(dry[0],v[0]*p.output,wet);r=std::lerp(dry[1],v[1]*p.output,wet);
+  l=std::lerp(dry[0],v[0]*p.output,wet);r=std::lerp(dry[1],v[1]*p.output,wet);if(transition>0){float q=1-float(transition)/transitionLength;l=std::lerp(transitionFrom[0],l,q);r=std::lerp(transitionFrom[1],r,q);--transition;}lastOut={l,r};
  }
 };
 struct FxRackState{

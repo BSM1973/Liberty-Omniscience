@@ -19,24 +19,21 @@ struct CreativeFFT {
   bool captured=false,wasFreeze=false,phaseReady=false;
  };
  std::vector<Channel> channels;
- struct Plan{std::array<std::array<float,maxN>,4> window{};std::array<C,maxN/2> twiddle{};Plan(){for(int q=0;q<4;++q){int size=512<<q;for(int j=0;j<size;++j)window[q][j]=.5f-.5f*std::cos(tau*j/size);}for(int j=0;j<maxN/2;++j)twiddle[j]=C(std::cos(-tau*j/maxN),std::sin(-tau*j/maxN));}};
+ struct Plan{std::array<std::array<float,maxN>,4> window{};std::array<C,maxN-1> twiddle{};std::array<std::array<int,maxBins>,4> band{};Plan(){for(int q=0;q<4;++q){int size=512<<q;for(int j=0;j<size;++j)window[q][j]=.5f-.5f*std::cos(tau*j/size);for(int k=1;k<=size/2;++k)band[q][k]=std::clamp(int(24*std::log2(1.f+float(k))/std::log2(float(size/2+1))),0,23);}for(int len=2;len<=maxN;len*=2)for(int j=0;j<len/2;++j)twiddle[len/2-1+j]=C(std::cos(-tau*j/len),std::sin(-tau*j/len));}};
  static const Plan& plan(){static const Plan p;return p;}
  const Plan* preparedPlan=nullptr;int quality=0;
- int pos=0,filled=0,clock=0;
+ int pos=0,filled=0,clock=0;std::array<float,24> meter{};
  void prepare(){
   channels.resize(2);
   preparedPlan=&plan();
   reset();
  }
- void reset()noexcept{pos=filled=clock=0;for(auto& c:channels)c=Channel{};}
+ void reset()noexcept{pos=filled=clock=0;meter={};for(auto& c:channels)c=Channel{};}
  void select(int size)noexcept{size=std::clamp(size,512,maxN);if(size!=n){n=size;hop=n/4;bins=n/2+1;quality=n==512?0:n==1024?1:n==2048?2:3;reset();}}
- template<size_t N> void fft(std::array<C,N>& a,bool inverse)const noexcept{
+ template<size_t N> void fft(std::array<C,N>& a,bool inverse,int mode=2)const noexcept{
   const int n=std::min(int(N),this->n);
   for(int i=1,j=0;i<n;++i){int bit=n>>1;for(;j&bit;bit>>=1)j^=bit;j^=bit;if(i<j)std::swap(a[i],a[j]);}
-  for(int len=2;len<=n;len*=2)for(int i=0;i<n;i+=len)for(int j=0;j<len/2;++j){
-   C w=preparedPlan->twiddle[j*maxN/len];if(inverse)w=std::conj(w);const C u=a[i+j],v=a[i+j+len/2]*w;
-   a[i+j]=u+v;a[i+j+len/2]=u-v;
-  }
+  for(int len=2;len<=n;len*=2){const int half=len/2;const auto* w=reinterpret_cast<const float*>(preparedPlan->twiddle.data()+half-1);for(int i=0;i<n;i+=len)fxButterfly(reinterpret_cast<float*>(a.data()+i),reinterpret_cast<float*>(a.data()+i+half),w,half,inverse,mode);}
   if(inverse)for(int j=0;j<n;++j)a[j]/=float(n);
  }
  static float wrap(float p)noexcept{return std::remainder(p,tau);}
@@ -108,6 +105,7 @@ struct CreativeFFT {
    if(k==0||k==n/2)z=C(z.real(),0);
    c.work[k]=z;if(k>0&&k<n/2)c.work[n-k]=std::conj(z);
   }
+  if(&c==&channels[0]){std::array<float,24> peaks{};for(int k=1;k<bins;++k){int band=preparedPlan->band[quality][k];peaks[band]=std::max(peaks[band],std::abs(c.work[k])*4/n);}for(int j=0;j<24;++j)meter[j]=.7f*meter[j]+.3f*std::clamp(peaks[j],0.f,2.f);}
   fft(c.work,true);
   for(int j=0;j<n;++j)c.real[j]=c.work[j].real();int first=n-pos;fxWindowAdd(c.output.data()+pos,c.real.data(),window.data(),first,2);fxWindowAdd(c.output.data(),c.real.data()+first,window.data()+first,pos,2);
  }

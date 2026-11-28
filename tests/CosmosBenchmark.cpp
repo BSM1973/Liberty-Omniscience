@@ -45,7 +45,7 @@ int fxQualification(){
 }
 int fxFortyBenchmark(){
  constexpr int n=128;constexpr double sr=48000.;
- std::cout<<"scenario,slots,rendered_seconds,mean_budget_pct,p95,p99,max,misses,peak,finite\n";
+ std::cout<<"scenario,slots,rendered_seconds,mean_budget_pct,p95,p99,max,misses,peak,finite,fx_allocated_bytes\n";
  for(int mode=0;mode<3;++mode){
   auto e=std::make_unique<cosmos::Engine>();e->prepare(sr);cosmos::Patch p;
   const int mixed[]={9,19,29,49,64,80,90,99};
@@ -53,7 +53,7 @@ int fxFortyBenchmark(){
   for(int j=0;j<8;++j)e->noteOn(0,48+j,.65f);
   int blocks=mode==0?22500:375;std::vector<double> times;times.reserve(blocks);double sum=0;int misses=0;float peak=0;bool finite=true;
   for(int j=0;j<blocks;++j){std::array<float,n> l{},r{};auto start=std::chrono::steady_clock::now();e->render(l.data(),r.data(),n,p);double cost=100*std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count()/(n/sr);times.push_back(cost);sum+=cost;misses+=cost>100;for(int i=0;i<n;++i){finite&=std::isfinite(l[i])&&std::isfinite(r[i]);peak=std::max({peak,std::abs(l[i]),std::abs(r[i])});}}
-  std::sort(times.begin(),times.end());std::cout<<(mode==0?"mixed_serial":mode==1?"fft2048_serial":"mixed_parallel")<<",40,"<<blocks*n/sr<<','<<sum/blocks<<','<<times[size_t(.95*(blocks-1))]<<','<<times[size_t(.99*(blocks-1))]<<','<<times.back()<<','<<misses<<','<<peak<<','<<finite<<std::endl;if(!finite)return 1;
+  std::sort(times.begin(),times.end());std::cout<<(mode==0?"mixed_serial":mode==1?"fft2048_serial":"mixed_parallel")<<",40,"<<blocks*n/sr<<','<<sum/blocks<<','<<times[size_t(.95*(blocks-1))]<<','<<times[size_t(.99*(blocks-1))]<<','<<times.back()<<','<<misses<<','<<peak<<','<<finite<<','<<e->fxAllocatedBytes()<<std::endl;if(!finite)return 1;
  }
  return 0;
 }

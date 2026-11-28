@@ -173,6 +173,8 @@ public:
     std::array<float,matrixCount> matrixValues()const noexcept{for(const auto& a:v)if(a.active)return a.routeView;return {};}
     std::array<float,lfoCount> lfoPhases()const noexcept{for(const auto& a:v)if(a.active)return a.lfoPhaseView;std::array<float,lfoCount> result;result.fill(-1);return result;}
     static int latency(const Patch& p)noexcept{int n=0;for(int k=0;k<layers;++k)n=std::max(n,rackLatency(p.fx[k]));return n+rackLatency(p.fx[4]);}
+    size_t fxAllocatedBytes()const noexcept{size_t bytes=sizeof(CreativeFFT::Plan);for(const auto& rack:fxState)for(const auto& slot:rack.slots)bytes+=slot.allocatedBytes();for(const auto& a:fxLayerAlign)for(const auto& v:a.ring)bytes+=v.capacity()*sizeof(float);return bytes;}
+    const std::array<float,24>& fxSpectrum(int rack,int slot)const noexcept{return fxState[rack].slots[slot].creative.spectral.meter;}
     float fxPhase(int rack,int slot)const noexcept{return fxState[rack].slots[slot].space.phase;}
     float fxReduction(int rack,int slot)const noexcept{return fxState[rack].slots[slot].reduction;}
     bool voiceActive(int index)const noexcept{return index>=0&&index<voices&&v[size_t(index)].active;}

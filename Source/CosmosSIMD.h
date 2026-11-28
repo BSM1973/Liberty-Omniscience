@@ -9,6 +9,7 @@
 #endif
 namespace cosmos {
 #if defined(COSMOS_AVX2_DISPATCH) && defined(_M_X64)
+void fxButterflyAVX2(float*,float*,const float*,int,bool) noexcept;
 void fxWindowAddAVX2(float*,const float*,const float*,int) noexcept;
 void advancePhasesAVX2(double*,const double*,int) noexcept;
 void interpolateAVX2(float*,const float*,const float*,const float*,const float*,const float*,float,int) noexcept;
@@ -75,6 +76,19 @@ inline void interpolateAdd(float* out,const float* a,const float* aa,const float
  }
 #endif
  for(;i<n;++i){float x=a[i]+(aa[i]-a[i])*t[i],y=b[i]+(bb[i]-b[i])*t[i];out[i]+=x+(y-x)*morph;}
+}
+// Interleaved real/imaginary pairs. A and B are disjoint FFT half-blocks.
+inline void fxButterfly(float* a,float* b,const float* w,int count,bool inverse,int mode)noexcept{
+#if defined(COSMOS_AVX2_DISPATCH) && defined(_M_X64)
+ if(mode==2&&count>=4&&hasAVX2()){fxButterflyAVX2(a,b,w,count,inverse);return;}
+#endif
+ int j=0;
+#if defined(__aarch64__)
+ if(mode){for(;j+3<count;j+=4){auto x=vld2q_f32(a+2*j),y=vld2q_f32(b+2*j),q=vld2q_f32(w+2*j);if(inverse)q.val[1]=vnegq_f32(q.val[1]);auto vr=vsubq_f32(vmulq_f32(y.val[0],q.val[0]),vmulq_f32(y.val[1],q.val[1])),vi=vaddq_f32(vmulq_f32(y.val[0],q.val[1]),vmulq_f32(y.val[1],q.val[0]));float32x4x2_t plus,minus;plus.val[0]=vaddq_f32(x.val[0],vr);plus.val[1]=vaddq_f32(x.val[1],vi);minus.val[0]=vsubq_f32(x.val[0],vr);minus.val[1]=vsubq_f32(x.val[1],vi);vst2q_f32(a+2*j,plus);vst2q_f32(b+2*j,minus);}}
+#elif defined(__SSE2__) || defined(_M_X64)
+ if(mode){const auto signs=_mm_setr_ps(-1,1,-1,1);for(;j+1<count;j+=2){auto x=_mm_loadu_ps(a+2*j),y=_mm_loadu_ps(b+2*j),q=_mm_loadu_ps(w+2*j);auto wr=_mm_shuffle_ps(q,q,_MM_SHUFFLE(2,2,0,0)),wi=_mm_shuffle_ps(q,q,_MM_SHUFFLE(3,3,1,1));if(inverse)wi=_mm_sub_ps(_mm_setzero_ps(),wi);auto v=_mm_add_ps(_mm_mul_ps(y,wr),_mm_mul_ps(_mm_mul_ps(_mm_shuffle_ps(y,y,_MM_SHUFFLE(2,3,0,1)),wi),signs));_mm_storeu_ps(a+2*j,_mm_add_ps(x,v));_mm_storeu_ps(b+2*j,_mm_sub_ps(x,v));}}
+#endif
+ for(;j<count;++j){int i=2*j;float wr=w[i],wi=inverse?-w[i+1]:w[i+1],vr=b[i]*wr-b[i+1]*wi,vi=b[i]*wi+b[i+1]*wr,ar=a[i],ai=a[i+1];a[i]=ar+vr;a[i+1]=ai+vi;b[i]=ar-vr;b[i+1]=ai-vi;}
 }
 inline void fxWindowAdd(float* out,const float* signal,const float* window,int n,int mode)noexcept{
 #if defined(COSMOS_AVX2_DISPATCH) && defined(_M_X64)
