@@ -358,19 +358,19 @@ struct ReverbState{
 };
 
 struct FxSlotState{
- int type=0;float wet=0;std::array<float,2> low{},dc{},env{};float phase=0,reduction=0;std::array<float,2> low2{},previous{},fastEnv{},slowEnv{};std::array<float,3> bandEnv{};float linkedEnv=0;FxSpaceState space;EchoState echo;ReverbState reverb;CreativeState creative;FxAlignment dryAlign,parallelAlign;int spectralLatency=0;FxFIR fir;int firQuality=0;std::array<float,2> lastOut{},transitionFrom{};int transition=0,transitionLength=0;float outputPeak=0,stereoCross=0,stereoEnergyL=0,stereoEnergyR=0;int meterClock=0;
+ int type=0;float wet=0;std::array<float,2> low{},dc{},env{};float phase=0,reduction=0;std::array<float,2> low2{},previous{},fastEnv{},slowEnv{};std::array<float,3> bandEnv{};float linkedEnv=0;FxSpaceState space;EchoState echo;ReverbState reverb;CreativeState creative;FxAlignment dryAlign,parallelAlign;int spectralLatency=0;FxFIR fir;int firQuality=0;std::array<float,2> lastOut{},transitionFrom{};int transition=0,transitionLength=0;float outputPeak=0,stereoCross=0,stereoEnergyL=0,stereoEnergyR=0;unsigned meterClock=0;float peakWindow=0;int warmup=0;
  void prepare(double sr=48000){(void)FxFIR::plans();space.prepare();echo.prepare(sr);reverb.prepare(sr);creative.prepare(sr);dryAlign.prepare(4096);parallelAlign.prepare(4096);clear();wet=0;type=0;}
  void reset()noexcept{clear();parallelAlign.reset();wet=0;type=0;}
- void clear(bool keepDry=false)noexcept{low={};dc={};env={};low2={};previous={};fastEnv={};slowEnv={};bandEnv={};linkedEnv=0;phase=0;reduction=0;space.reset();echo.reset();reverb.reset();creative.reset();if(!keepDry)dryAlign.reset();spectralLatency=0;fir.reset();firQuality=0;transition=transitionLength=0;lastOut={};transitionFrom={};outputPeak=stereoCross=stereoEnergyL=stereoEnergyR=0;meterClock=0;}
+ void clear(bool keepDry=false)noexcept{low={};dc={};env={};low2={};previous={};fastEnv={};slowEnv={};bandEnv={};linkedEnv=0;phase=0;reduction=0;space.reset();echo.reset();reverb.reset();creative.reset();if(!keepDry)dryAlign.reset();spectralLatency=0;fir.reset();firQuality=0;transition=transitionLength=0;lastOut={};transitionFrom={};outputPeak=stereoCross=stereoEnergyL=stereoEnergyR=0;meterClock=0;peakWindow=0;warmup=0;}
  size_t allocatedBytes()const noexcept{size_t n=sizeof(*this);auto add=[&](const auto& x){for(const auto& v:x)n+=v.capacity()*sizeof(float);};add(space.delay);add(echo.ring);add(reverb.tank);add(reverb.early);add(reverb.pitch);add(creative.ring);add(dryAlign.ring);add(parallelAlign.ring);n+=creative.spectral.channels.capacity()*sizeof(CreativeFFT::Channel)+creative.spectral.scratch.capacity()*sizeof(CreativeFFT::Scratch);return n;}
  bool active(const FxParams& p)const noexcept{return (p.enabled&&p.type>0)||wet>0;}
  void tick(float& l,float& r,const FxParams& p,double sr,const std::array<float,8>& macros)noexcept{
   const int desired=p.enabled?std::clamp(p.type,0,fxTypes-1):0;const int latency=fxLatency(p);
-  if(latency>0){if(type!=desired||spectralLatency!=latency){bool change=type==desired&&spectralLatency>0&&spectralLatency!=latency;auto prev=lastOut;clear(change);type=desired;spectralLatency=latency;wet=0;if(change){transitionFrom=prev;transition=transitionLength=std::max(1,int(sr*.005));}}}
+  if(latency>0){if(type!=desired||spectralLatency!=latency){bool change=type==desired&&spectralLatency>0&&spectralLatency!=latency;auto prev=lastOut;clear(change);type=desired;spectralLatency=latency;wet=0;if(change){transitionFrom=prev;transition=transitionLength=std::max(1,int(sr*.005));if(creativeSpectral(desired))warmup=2*latency;}}}
   else if(spectralLatency>0){clear();type=desired;wet=0;}
-  if(!active(p)){reduction=0;return;}
+  if(!active(p)){reduction=0;outputPeak=peakWindow=0;stereoCross=stereoEnergyL=stereoEnergyR=0;return;}
   if(type!=desired&&wet<=0){type=desired;clear();}
-  float target=type==desired&&type!=0?std::clamp(p.mix,0.f,1.f):0.f;
+  float target=type==desired&&type!=0?std::clamp(p.mix,0.f,1.f):0.f;if(warmup>0){--warmup;target=0;}
   float step=float(1/std::max(1.,sr*.005));wet+=std::clamp(target-wet,-step,step);if(type==0||(wet<=0&&latency==0))return;
   float a=std::clamp((p.cc>=0&&p.ccValue>=0?p.ccValue:p.a)+(p.macro>0&&p.macro<=8?p.depth*(macros[p.macro-1]-.5f)*2:0),0.f,1.f),b=std::clamp(p.b,0.f,1.f);
   float dry[2]={l,r},v[2]={l*p.input,r*p.input};
@@ -409,7 +409,7 @@ struct FxSlotState{
    default:break;
   }}
   if(latency)dryAlign.tick(dry[0],dry[1],latency);
-  l=std::lerp(dry[0],v[0]*p.output,wet);r=std::lerp(dry[1],v[1]*p.output,wet);if(transition>0){float q=1-float(transition)/transitionLength;l=std::lerp(transitionFrom[0],l,q);r=std::lerp(transitionFrom[1],r,q);--transition;}lastOut={l,r};if((++meterClock&31)==0){outputPeak=std::max(std::max(std::abs(l),std::abs(r)),outputPeak*.96f);stereoCross+=.04f*(l*r-stereoCross);stereoEnergyL+=.04f*(l*l-stereoEnergyL);stereoEnergyR+=.04f*(r*r-stereoEnergyR);}
+  l=std::lerp(dry[0],v[0]*p.output,wet);r=std::lerp(dry[1],v[1]*p.output,wet);if(transition>0){float q=1-float(transition)/transitionLength;l=std::lerp(transitionFrom[0],l,q);r=std::lerp(transitionFrom[1],r,q);--transition;}lastOut={l,r};peakWindow=std::max({peakWindow,std::abs(l),std::abs(r)});if((++meterClock&31)==0){outputPeak=std::max(peakWindow,outputPeak*.96f);peakWindow=0;stereoCross+=.04f*(l*r-stereoCross);stereoEnergyL+=.04f*(l*l-stereoEnergyL);stereoEnergyR+=.04f*(r*r-stereoEnergyR);}
  }
 };
 struct FxRackState{
