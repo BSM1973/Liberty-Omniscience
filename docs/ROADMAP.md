@@ -212,3 +212,8 @@ v0.7.7 follow-up: native FFT butterflies (NEON/SSE2/AVX2 dispatch) with shared c
 ### v0.7.7 Windows qualification hotfix
 
 Windows CosmosFoundation terminated with SEGFAULT before reporting a failed assertion; macOS completed. Suspected stack pressure is addressed by moving FX rack/slot and large FFT test fixtures to heap, resetting spectral state in place rather than constructing Channel temporaries, and moving spectral scratch to preallocated Channel storage. Offline CosmosTests gets explicit 8 MiB Windows stack reserve and diagnostic stage markers; no test disabled, SIMD remains enabled. Root cause remains provisional until the rerun completes. Scratch storage increases allocated FX memory and is included by the existing Channel-size telemetry.
+
+
+## v0.7.8 COSMOS FX FINAL QUALIFICATION
+
+Baseline v0.7.7: both builds green. Stagger per-slot FFT frame phases, keep shared preallocated stereo scratch (not shared between engines/slots), retain fixed FFT latency and check stereo WOLA A/B for nonzero offsets. Delay alignment retains history and crossfades read heads over 256 samples; full host PDC transitions remain unqualified. Peak trims for 47 of 300 profiles derived from v0.7.7 macOS CSV (0.9 peak target on one reference signal; no universal limiter or loudness normalization); only explicit profile selection changes output gain. Add actual peak and stereo correlation telemetry, 10-minute mixed 40-FX rendered endurance, alias probe at 21 kHz for a 9 kHz input across 10 analog modes and 5 factors, FX parameter state roundtrip, 1024-wide layout snapshots. Native DAW checks, subjective listening and physical 13-inch check still required. Preserve 100 IDs and existing project parameters.

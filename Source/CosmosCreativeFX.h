@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <cstdint>
 #include "CosmosSIMD.h"
 namespace cosmos {
 // Streaming WOLA processor. 512 samples of intrinsic latency, 128-sample hop.
@@ -13,25 +14,23 @@ struct CreativeFFT {
  using C=std::complex<float>;
  static constexpr float pi=3.14159265358979323846f,tau=2*pi;
  struct Channel {
-  std::array<float,maxN> input{},output{},real{};
-  std::array<C,maxN> work{},original{};
+  std::array<float,maxN> input{},output{};
   std::array<float,maxBins> held{},prevPhase{},heldPhase{},advance{},envelope{},carrierPhase{},pitchPhase{},harmonyPhase{};
-  std::array<float,maxBins> magScratch{},argScratch{},stepScratch{},blurScratch{};
-  std::array<double,maxBins+1> sumScratch{},weightedScratch{};
   bool captured=false,wasFreeze=false,phaseReady=false;
-  void reset()noexcept{input.fill(0);output.fill(0);real.fill(0);work.fill(C{});original.fill(C{});held.fill(0);prevPhase.fill(0);heldPhase.fill(0);advance.fill(0);envelope.fill(0);carrierPhase.fill(0);pitchPhase.fill(0);harmonyPhase.fill(0);captured=wasFreeze=phaseReady=false;}
+  void reset()noexcept{input.fill(0);output.fill(0);held.fill(0);prevPhase.fill(0);heldPhase.fill(0);advance.fill(0);envelope.fill(0);carrierPhase.fill(0);pitchPhase.fill(0);harmonyPhase.fill(0);captured=wasFreeze=phaseReady=false;}
  };
- std::vector<Channel> channels;
+ struct Scratch{std::array<float,maxN> real{};std::array<C,maxN> work{},original{};std::array<float,maxBins> mag{},arg{},step{},blur{};std::array<double,maxBins+1> sum{},weighted{};};
+ std::vector<Channel> channels;std::vector<Scratch> scratch;
  struct Plan{std::array<std::array<float,maxN>,4> window{};std::array<C,maxN-1> twiddle{};std::array<std::array<int,maxBins>,4> band{};Plan(){for(int q=0;q<4;++q){int size=512<<q;for(int j=0;j<size;++j)window[q][j]=.5f-.5f*std::cos(tau*j/size);for(int k=1;k<=size/2;++k)band[q][k]=std::clamp(int(24*std::log2(1.f+float(k))/std::log2(float(size/2+1))),0,23);}for(int len=2;len<=maxN;len*=2)for(int j=0;j<len/2;++j)twiddle[len/2-1+j]=C(std::cos(-tau*j/len),std::sin(-tau*j/len));}};
  static const Plan& plan(){static const Plan p;return p;}
  const Plan* preparedPlan=nullptr;int quality=0;
- int pos=0,filled=0,clock=0;std::array<float,24> meter{};
+ int pos=0,filled=0,schedule=0;std::uint32_t clock=0;std::array<float,24> meter{};
  void prepare(){
-  channels.resize(2);
+  channels.resize(2);scratch.resize(1);
   preparedPlan=&plan();
   reset();
  }
- void reset()noexcept{pos=filled=clock=0;meter={};for(auto& c:channels)c.reset();}
+ void reset()noexcept{pos=filled=0;clock=0;meter={};for(auto& c:channels)c.reset();}
  void select(int size)noexcept{size=std::clamp(size,512,maxN);if(size!=n){n=size;hop=n/4;bins=n/2+1;quality=n==512?0:n==1024?1:n==2048?2:3;reset();}}
  template<size_t N> void fft(std::array<C,N>& a,bool inverse,int mode=2)const noexcept{
   const int n=std::min(int(N),this->n);
@@ -55,37 +54,38 @@ struct CreativeFFT {
  }
  static void triangularBlur(const float* mag,float* result,int bins,int radius)noexcept{std::array<double,maxBins+1> sums{},weighted{};triangularBlur(mag,result,bins,radius,sums.data(),weighted.data());}
  void frame(Channel& c,int type,float a,float b,bool freeze,float sr)noexcept{
-  const auto& window=preparedPlan->window[quality];for(int j=0;j<n;++j)c.work[j]=C(c.input[(pos+j)%n]*window[j],0);
-  fft(c.work,false);std::copy_n(c.work.begin(),n,c.original.begin());
-  auto& mag=c.magScratch;auto& arg=c.argScratch;auto& step=c.stepScratch;auto& blurred=c.blurScratch;
+  auto& temp=scratch[0];auto& work=temp.work;auto& original=temp.original;auto& real=temp.real;
+  const auto& window=preparedPlan->window[quality];for(int j=0;j<n;++j)work[j]=C(c.input[(pos+j)%n]*window[j],0);
+  fft(work,false);std::copy_n(work.begin(),bins,original.begin());
+  auto& mag=temp.mag;auto& arg=temp.arg;auto& step=temp.step;auto& blurred=temp.blur;
   const bool pitch=type>=85&&type<=87,needsPhase=type==79||pitch;const bool firstPhase=!c.phaseReady;
   float total=0;
   for(int k=0;k<bins;++k){
-   mag[k]=std::abs(c.original[k]);if(needsPhase)arg[k]=std::arg(c.original[k]);total+=mag[k];
+   mag[k]=std::abs(original[k]);if(needsPhase)arg[k]=std::arg(original[k]);total+=mag[k];
    float expected=tau*k*hop/n;
    if(needsPhase){step[k]=c.phaseReady?expected+wrap(arg[k]-c.prevPhase[k]-expected):expected;c.prevPhase[k]=arg[k];}
   }
   c.phaseReady=true;
   if(!freeze&&c.wasFreeze)c.captured=false;
   if((type==79||type==81)&&(!c.captured||(freeze&&!c.wasFreeze))&&total>1e-4f){
-   c.held=mag;c.heldPhase=arg;c.advance=step;c.captured=true;
+   std::copy_n(mag.begin(),bins,c.held.begin());if(needsPhase){std::copy_n(arg.begin(),bins,c.heldPhase.begin());std::copy_n(step.begin(),bins,c.advance.begin());}c.captured=true;
   }
   c.wasFreeze=freeze;
   if(pitch||type==88||type==89){
    const int radius=std::max(2,int(400*n/sr));float sum=0;int lo=0,hi=std::min(bins-1,radius);for(int j=lo;j<=hi;++j)sum+=mag[j];for(int k=0;k<bins;++k){int l=std::max(0,k-radius),h=std::min(bins-1,k+radius);while(lo<l)sum-=mag[lo++];while(hi<h)sum+=mag[++hi];c.envelope[k]=std::max(0.f,sum/(hi-lo+1));}
   }
-  if(type==80&&b>0)triangularBlur(mag.data(),blurred.data(),bins,1+int(a*12*n/512.f),c.sumScratch.data(),c.weightedScratch.data());
+  if(type==80&&b>0)triangularBlur(mag.data(),blurred.data(),bins,1+int(a*12*n/512.f),temp.sum.data(),temp.weighted.data());
   const float pitchRatio=std::exp2(std::round((2*a-1)*12.f)/12.f);
   const float gateThreshold=.02f*(n/512.f)*std::pow(1000.f,a),compThreshold=.1f*(n/512.f)*std::pow(100.f,a);
   const int shift=int(std::round((2*a-1)*32*n/512.f));const C shiftPhase=std::polar(1.f,tau*shift*float((clock/hop)%4)*hop/n);
   const auto scaleMag=[](C z,float from,float to){return from>1e-12f?z*(to/from):C{};};
   for(int k=0;k<bins;++k){
-   float m=mag[k],ph=arg[k];C z=c.original[k];
+   float m=mag[k],ph=arg[k];C z=original[k];
    switch(type){
     case 79:if(c.captured){c.heldPhase[k]=wrap(c.heldPhase[k]+c.advance[k]);z=std::lerp(0.f,1.f,freeze?1.f:a)*std::polar(c.held[k],c.heldPhase[k])+(1-(freeze?1.f:a))*z;}break;
     case 80:if(b>0)z=scaleMag(z,m,std::lerp(m,blurred[k],b));break;
     case 81:if(c.captured){z=scaleMag(z,m,std::lerp(m,c.held[k],a));}break;
-    case 82:{int src=k-shift;z=src>=0&&src<bins?c.original[src]*shiftPhase:C{};z=(1-b)*c.original[k]+b*z;break;}
+    case 82:{int src=k-shift;z=src>=0&&src<bins?original[src]*shiftPhase:C{};z=(1-b)*original[k]+b*z;break;}
     case 83:{float threshold=gateThreshold;float g=m>=threshold?1.f:std::pow(m/std::max(threshold,1e-8f),1+7*b);z*=g;break;}
     case 84:{float threshold=compThreshold;if(m>threshold)z*=std::pow(threshold/m,1-1/(1+15*b));break;}
     case 85:case 86:case 87:{
@@ -103,22 +103,22 @@ struct CreativeFFT {
      if(type==86)shifted=.55f*(shifted+voice(1.5f,c.harmonyPhase));
      z=(1-b)*z+b*shifted;break;}
     case 88:{float ratio=std::exp2(2*a-1);float target=magnitudeAt(c.envelope,k/ratio);float gain=std::clamp(target/std::max(.02f,c.envelope[k]),.1f,5.f);z*=std::lerp(1.f,gain,b);break;}
-    case 89:{float fundamental=55.f*std::exp2(3*a);float hz=k*sr/n;int harmonic=std::max(1,int(std::round(hz/fundamental)));float center=harmonic*fundamental*n/sr;float distance=std::abs(k-center);float carrier=std::exp(-distance*distance*.7f)/std::sqrt(float(harmonic));c.carrierPhase[k]=wrap(c.carrierPhase[k]+tau*harmonic*fundamental*hop/sr);z=std::polar(c.envelope[k]*carrier*3.f,c.carrierPhase[k]);z=(1-b)*c.original[k]+b*z;break;}
+    case 89:{float fundamental=55.f*std::exp2(3*a);float hz=k*sr/n;int harmonic=std::max(1,int(std::round(hz/fundamental)));float center=harmonic*fundamental*n/sr;float distance=std::abs(k-center);float carrier=std::exp(-distance*distance*.7f)/std::sqrt(float(harmonic));c.carrierPhase[k]=wrap(c.carrierPhase[k]+tau*harmonic*fundamental*hop/sr);z=std::polar(c.envelope[k]*carrier*3.f,c.carrierPhase[k]);z=(1-b)*original[k]+b*z;break;}
     default:break;
    }
    if(k==0||k==n/2)z=C(z.real(),0);
-   c.work[k]=z;if(k>0&&k<n/2)c.work[n-k]=std::conj(z);
+   work[k]=z;if(k>0&&k<n/2)work[n-k]=std::conj(z);
   }
-  if(&c==&channels[0]){std::array<float,24> peaks{};for(int k=1;k<bins;++k){int band=preparedPlan->band[quality][k];peaks[band]=std::max(peaks[band],std::abs(c.work[k])*4/n);}for(int j=0;j<24;++j)meter[j]=.7f*meter[j]+.3f*std::clamp(peaks[j],0.f,2.f);}
-  fft(c.work,true);
-  for(int j=0;j<n;++j)c.real[j]=c.work[j].real();int first=n-pos;fxWindowAdd(c.output.data()+pos,c.real.data(),window.data(),first,2);fxWindowAdd(c.output.data(),c.real.data()+first,window.data()+first,pos,2);
+  if(&c==&channels[0]){std::array<float,24> peaks{};for(int k=1;k<bins;++k){int band=preparedPlan->band[quality][k];peaks[band]=std::max(peaks[band],std::abs(work[k])*4/n);}for(int j=0;j<24;++j)meter[j]=.7f*meter[j]+.3f*std::clamp(peaks[j],0.f,2.f);}
+  fft(work,true);
+  for(int j=0;j<n;++j)real[j]=work[j].real();int first=n-pos;fxWindowAdd(c.output.data()+pos,real.data(),window.data(),first,2);fxWindowAdd(c.output.data(),real.data()+first,window.data()+first,pos,2);
  }
  void tick(float* v,int type,float a,float b,bool freeze,double sr)noexcept{
   if(channels.size()!=2)return;
   for(int c=0;c<2;++c){auto& s=channels[c];float in=v[c];v[c]=s.output[pos];s.output[pos]=0;s.input[pos]=in;}
   pos=(pos+1)%n;filled=std::min(n,filled+1);
-  if(++clock>=1000000000)clock=0;
-  if(filled==n&&clock%hop==0)for(auto& c:channels)frame(c,type,a,b,freeze,float(sr));
+  ++clock;
+  if(filled==n&&(clock+std::uint32_t(schedule))%std::uint32_t(hop)==0)for(auto& c:channels)frame(c,type,a,b,freeze,float(sr));
  }
 };
 inline int fftSize(int quality)noexcept{return 512<<std::clamp(quality,0,3);}

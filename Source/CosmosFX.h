@@ -9,10 +9,49 @@
 namespace cosmos {
 constexpr int fxRacks=5,fxSlots=8,fxTypes=101;
 struct FxParams{int type=0;bool enabled=false;float mix=1,input=1,output=1,a=.5f,b=.5f;int macro=0;float depth=0;bool autoGain=false;int quality=0,cc=-1;float ccValue=-1;bool sync=false;float stereo=.5f;double bpm=120;float delayFeedbackR=.5f,delayTone=.75f;bool delayFreeze=false;int fftQuality=0;};
+// Peak trims calibrated on v0.7.7 macOS 48 kHz qualification input. No boosts.
+// Applied only on explicit profile selection; saved project gains are unchanged.
+inline float fxProfileTrim(int type,int profile)noexcept{
+ struct Entry{int type;std::array<float,3> gain;};
+ constexpr Entry trims[]={
+{1,{1.0000f,0.6714f,0.4293f}},
+{2,{0.9033f,0.9000f,0.9000f}},
+{3,{0.9000f,0.9000f,0.9000f}},
+{7,{1.0000f,1.0000f,0.9507f}},
+{17,{1.0000f,1.0000f,0.3461f}},
+{19,{0.8591f,0.7833f,0.7284f}},
+{21,{0.9642f,0.9146f,0.9062f}},
+{23,{1.0000f,0.9745f,0.9392f}},
+{24,{0.9099f,0.9000f,0.9000f}},
+{26,{0.9000f,0.9000f,0.9000f}},
+{27,{0.9000f,0.9000f,0.9001f}},
+{43,{0.9796f,0.9828f,0.9809f}},
+{45,{1.0000f,0.8134f,0.6504f}},
+{88,{1.0000f,1.0000f,0.8932f}},
+{96,{0.2250f,0.2250f,0.2611f}},
+{97,{0.2250f,0.2832f,0.5576f}},
+{98,{0.8652f,0.8306f,0.8373f}},
+{99,{0.3560f,0.3461f,0.3461f}},
+{100,{1.0000f,0.9180f,0.8903f}}};
+ for(const auto& e:trims)if(e.type==type)return e.gain[std::clamp(profile,1,3)-1];return 1.f;
+}
 inline int fxLatency(const FxParams& p)noexcept{return !p.enabled?0:creativeSpectral(p.type)?fftSize(p.fftQuality):p.type>=19&&p.type<29&&p.quality>0?24:0;}
 struct FxRack{bool parallel=false;std::array<FxParams,fxSlots> slots{};};
 inline int rackLatency(const FxRack& r)noexcept{int n=0;for(const auto& p:r.slots){const int v=fxLatency(p);n=r.parallel?std::max(n,v):n+v;}return n;}
-struct FxAlignment{std::array<std::vector<float>,2> ring;int write=0,valid=0,delay=-1;void prepare(int max){for(auto& v:ring)v.resize(size_t(max)+1);reset();}void reset()noexcept{write=valid=0;delay=-1;}void tick(float& l,float& r,int samples)noexcept{if(ring[0].empty())return;int n=int(ring[0].size());samples=std::clamp(samples,0,n-1);if(delay!=samples){reset();delay=samples;}if(!samples)return;int read=(write-samples+n)%n;float a=valid>=samples?ring[0][read]:0,b=valid>=samples?ring[1][read]:0;ring[0][write]=l;ring[1][write]=r;l=a;r=b;write=(write+1)%n;valid=std::min(valid+1,n-1);}};
+struct FxAlignment{
+ std::array<std::vector<float>,2> ring;int write=0,valid=0,delay=-1,oldDelay=0,fade=0;
+ static constexpr int transitionSamples=256;
+ void prepare(int max){for(auto& v:ring)v.resize(size_t(max)+1);reset();}
+ void reset()noexcept{write=valid=0;delay=-1;oldDelay=fade=0;}
+ void tick(float& l,float& r,int samples)noexcept{
+  if(ring[0].empty())return;int n=int(ring[0].size());samples=std::clamp(samples,0,n-1);
+  if(delay<0)delay=samples;else if(delay!=samples){oldDelay=delay;delay=samples;fade=transitionSamples;}
+  auto read=[&](int c,int d,float x){return d==0?x:valid>=d?ring[c][(write-d+n)%n]:0.f;};
+  float a=read(0,delay,l),b=read(1,delay,r);
+  if(fade){float q=1-float(fade)/transitionSamples;a=std::lerp(read(0,oldDelay,l),a,q);b=std::lerp(read(1,oldDelay,r),b,q);--fade;}
+  ring[0][write]=l;ring[1][write]=r;l=a;r=b;if(++write>=n)write=0;valid=std::min(valid+1,n-1);
+ }
+};
 inline float analogShape(int type,float x,float a,float b)noexcept{
  float drive=1+15*a,z=x*drive;switch(type){
  case 19:return std::tanh(z+.3f*b)-std::tanh(.3f*b);
@@ -319,15 +358,15 @@ struct ReverbState{
 };
 
 struct FxSlotState{
- int type=0;float wet=0;std::array<float,2> low{},dc{},env{};float phase=0,reduction=0;std::array<float,2> low2{},previous{},fastEnv{},slowEnv{};std::array<float,3> bandEnv{};float linkedEnv=0;FxSpaceState space;EchoState echo;ReverbState reverb;CreativeState creative;FxAlignment dryAlign,parallelAlign;int spectralLatency=0;FxFIR fir;int firQuality=0;std::array<float,2> lastOut{},transitionFrom{};int transition=0,transitionLength=0;
+ int type=0;float wet=0;std::array<float,2> low{},dc{},env{};float phase=0,reduction=0;std::array<float,2> low2{},previous{},fastEnv{},slowEnv{};std::array<float,3> bandEnv{};float linkedEnv=0;FxSpaceState space;EchoState echo;ReverbState reverb;CreativeState creative;FxAlignment dryAlign,parallelAlign;int spectralLatency=0;FxFIR fir;int firQuality=0;std::array<float,2> lastOut{},transitionFrom{};int transition=0,transitionLength=0;float outputPeak=0,stereoCross=0,stereoEnergyL=0,stereoEnergyR=0;int meterClock=0;
  void prepare(double sr=48000){(void)FxFIR::plans();space.prepare();echo.prepare(sr);reverb.prepare(sr);creative.prepare(sr);dryAlign.prepare(4096);parallelAlign.prepare(4096);clear();wet=0;type=0;}
  void reset()noexcept{clear();parallelAlign.reset();wet=0;type=0;}
- void clear()noexcept{low={};dc={};env={};low2={};previous={};fastEnv={};slowEnv={};bandEnv={};linkedEnv=0;phase=0;reduction=0;space.reset();echo.reset();reverb.reset();creative.reset();dryAlign.reset();spectralLatency=0;fir.reset();firQuality=0;transition=transitionLength=0;lastOut={};transitionFrom={};}
- size_t allocatedBytes()const noexcept{size_t n=sizeof(*this);auto add=[&](const auto& x){for(const auto& v:x)n+=v.capacity()*sizeof(float);};add(space.delay);add(echo.ring);add(reverb.tank);add(reverb.early);add(reverb.pitch);add(creative.ring);add(dryAlign.ring);add(parallelAlign.ring);n+=creative.spectral.channels.capacity()*sizeof(CreativeFFT::Channel);return n;}
+ void clear(bool keepDry=false)noexcept{low={};dc={};env={};low2={};previous={};fastEnv={};slowEnv={};bandEnv={};linkedEnv=0;phase=0;reduction=0;space.reset();echo.reset();reverb.reset();creative.reset();if(!keepDry)dryAlign.reset();spectralLatency=0;fir.reset();firQuality=0;transition=transitionLength=0;lastOut={};transitionFrom={};outputPeak=stereoCross=stereoEnergyL=stereoEnergyR=0;meterClock=0;}
+ size_t allocatedBytes()const noexcept{size_t n=sizeof(*this);auto add=[&](const auto& x){for(const auto& v:x)n+=v.capacity()*sizeof(float);};add(space.delay);add(echo.ring);add(reverb.tank);add(reverb.early);add(reverb.pitch);add(creative.ring);add(dryAlign.ring);add(parallelAlign.ring);n+=creative.spectral.channels.capacity()*sizeof(CreativeFFT::Channel)+creative.spectral.scratch.capacity()*sizeof(CreativeFFT::Scratch);return n;}
  bool active(const FxParams& p)const noexcept{return (p.enabled&&p.type>0)||wet>0;}
  void tick(float& l,float& r,const FxParams& p,double sr,const std::array<float,8>& macros)noexcept{
   const int desired=p.enabled?std::clamp(p.type,0,fxTypes-1):0;const int latency=fxLatency(p);
-  if(latency>0){if(type!=desired||spectralLatency!=latency){bool change=type==desired&&spectralLatency>0&&spectralLatency!=latency;auto prev=lastOut;clear();type=desired;spectralLatency=latency;wet=0;if(change){transitionFrom=prev;transition=transitionLength=std::max(1,int(sr*.005));}}}
+  if(latency>0){if(type!=desired||spectralLatency!=latency){bool change=type==desired&&spectralLatency>0&&spectralLatency!=latency;auto prev=lastOut;clear(change);type=desired;spectralLatency=latency;wet=0;if(change){transitionFrom=prev;transition=transitionLength=std::max(1,int(sr*.005));}}}
   else if(spectralLatency>0){clear();type=desired;wet=0;}
   if(!active(p)){reduction=0;return;}
   if(type!=desired&&wet<=0){type=desired;clear();}
@@ -370,7 +409,7 @@ struct FxSlotState{
    default:break;
   }}
   if(latency)dryAlign.tick(dry[0],dry[1],latency);
-  l=std::lerp(dry[0],v[0]*p.output,wet);r=std::lerp(dry[1],v[1]*p.output,wet);if(transition>0){float q=1-float(transition)/transitionLength;l=std::lerp(transitionFrom[0],l,q);r=std::lerp(transitionFrom[1],r,q);--transition;}lastOut={l,r};
+  l=std::lerp(dry[0],v[0]*p.output,wet);r=std::lerp(dry[1],v[1]*p.output,wet);if(transition>0){float q=1-float(transition)/transitionLength;l=std::lerp(transitionFrom[0],l,q);r=std::lerp(transitionFrom[1],r,q);--transition;}lastOut={l,r};if((++meterClock&31)==0){outputPeak=std::max(std::max(std::abs(l),std::abs(r)),outputPeak*.96f);stereoCross+=.04f*(l*r-stereoCross);stereoEnergyL+=.04f*(l*l-stereoEnergyL);stereoEnergyR+=.04f*(r*r-stereoEnergyR);}
  }
 };
 struct FxRackState{

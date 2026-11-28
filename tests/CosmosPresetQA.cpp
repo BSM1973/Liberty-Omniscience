@@ -156,7 +156,14 @@ int main(){
     for(const auto& c:controls){auto* x=findParameter(*a,c.first);auto* y=findParameter(*b,c.first);matrixRestored&=x&&y&&std::abs(x->getValue()-y->getValue())<1e-6f;}
     std::cout<<"Macro and extended matrix state: "<<(matrixRestored?"passed":"FAILED")<<'\n';
     bool learned=cosmosTestMidiLearn(*a);std::cout<<"MIDI Learn processor CC: "<<(learned?"passed":"FAILED")<<'\n';
-    bool qualified=matrixRestored&&learned&&qualifyProcessor(*a,*b,*ma,*mb);
+
+    bool fxRestored=true;a->setCurrentProgram(0);b->setCurrentProgram(0);
+    const std::array<std::pair<const char*,float>,8> fxControls={{{"fx1_1_type",.8f},{"fx1_1_enabled",1.f},{"fx1_1_fftQuality",1.f},{"fx1_1_output",.42f},{"fx5_8_quality",1.f},{"fx5_8_cc",.5f},{"fx5_8_a",.35f},{"fx5_parallel",1.f}}};
+    for(const auto& c:fxControls){auto* par=findParameter(*a,c.first);if(!par){fxRestored=false;continue;}par->beginChangeGesture();par->setValueNotifyingHost(c.second);par->endChangeGesture();}
+    juce::MemoryBlock fxState;a->getStateInformation(fxState);b->setStateInformation(fxState.getData(),int(fxState.getSize()));
+    for(const auto& c:fxControls){auto* x=findParameter(*a,c.first);auto* y=findParameter(*b,c.first);fxRestored&=x&&y&&std::abs(x->getValue()-y->getValue())<1e-6f;}
+    a->setCurrentProgram(0);b->setCurrentProgram(0);std::cout<<"FX automation and state: "<<(fxRestored?"passed":"FAILED")<<'\n';
+    bool qualified=matrixRestored&&learned&&fxRestored&&qualifyProcessor(*a,*b,*ma,*mb);
     bool imported=qualifyImports();
     auto guiDir=juce::File::getCurrentWorkingDirectory().getChildFile("cosmos-ui-qa");
     bool layout=guiDir.createDirectory().wasOk()&&cosmosTestLayout(*a,guiDir);

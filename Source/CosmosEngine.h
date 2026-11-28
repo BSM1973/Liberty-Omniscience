@@ -135,7 +135,7 @@ class Engine {
     using MidiTable=std::array<std::array<float,128>,16>;
     std::vector<MidiTable> midiTables=std::vector<MidiTable>(2);
 public:
-    void prepare(double rate) noexcept {sr=std::max(8000.,rate);(void)waveBank();(void)hdBank();(void)factoryGrains();(void)hannLut();(void)sineLut();for(auto& rack:fxState)for(auto& slot:rack.slots)slot.prepare(sr);for(auto& a:fxLayerAlign)a.prepare(fxSlots*4096);reset();}
+    void prepare(double rate) noexcept {sr=std::max(8000.,rate);(void)waveBank();(void)hdBank();(void)factoryGrains();(void)hannLut();(void)sineLut();int fxIndex=0;for(auto& rack:fxState)for(auto& slot:rack.slots){slot.prepare(sr);slot.creative.spectral.schedule=(fxIndex++*103)%1024;}for(auto& a:fxLayerAlign)a.prepare(fxSlots*4096);reset();}
     void reset() noexcept {for(auto& voice:v)voice.reset();pedal={};bend={};midiTables[0]={};channelPressure={};midiTables[1]={};counter=0;freeCycles={};nexusMotion={};nexusCC.fill(-1);for(auto& rack:fxState)for(auto& slot:rack.slots)slot.reset();for(auto& a:fxLayerAlign)a.reset();}
     void noteOn(int ch,int note,float velocity) noexcept {
       if(ch<0||ch>=16)return;
@@ -175,6 +175,8 @@ public:
     static int latency(const Patch& p)noexcept{int n=0;for(int k=0;k<layers;++k)n=std::max(n,rackLatency(p.fx[k]));return n+rackLatency(p.fx[4]);}
     size_t fxAllocatedBytes()const noexcept{size_t bytes=sizeof(CreativeFFT::Plan);for(const auto& rack:fxState)for(const auto& slot:rack.slots)bytes+=slot.allocatedBytes();for(const auto& a:fxLayerAlign)for(const auto& v:a.ring)bytes+=v.capacity()*sizeof(float);return bytes;}
     const std::array<float,24>& fxSpectrum(int rack,int slot)const noexcept{return fxState[rack].slots[slot].creative.spectral.meter;}
+    float fxOutputPeak(int rack,int slot)const noexcept{return fxState[rack].slots[slot].outputPeak;}
+    float fxCorrelation(int rack,int slot)const noexcept{const auto& s=fxState[rack].slots[slot];return std::clamp(s.stereoCross/std::sqrt(std::max(1e-12f,s.stereoEnergyL*s.stereoEnergyR)),-1.f,1.f);}
     float fxPhase(int rack,int slot)const noexcept{return fxState[rack].slots[slot].space.phase;}
     float fxReduction(int rack,int slot)const noexcept{return fxState[rack].slots[slot].reduction;}
     bool voiceActive(int index)const noexcept{return index>=0&&index<voices&&v[size_t(index)].active;}

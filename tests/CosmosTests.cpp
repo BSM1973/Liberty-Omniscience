@@ -553,5 +553,14 @@ int main(){
  {cosmos::CreativeFFT f;f.prepare();f.select(1024);double high=0,low=0,hs=0,hc=0,ls=0,lc=0;
   for(int j=0;j<8192;++j){float v[2]={.3f*std::sin(cosmos::CreativeFFT::tau*16*j/1024),0};f.tick(v,87,.8f,1,false,48000);if(j>=4096){float ph=cosmos::CreativeFFT::tau*j/1024;hs+=v[0]*std::sin(32*ph);hc+=v[0]*std::cos(32*ph);ls+=v[0]*std::sin(16*ph);lc+=v[0]*std::cos(16*ph);}}high=std::hypot(hs,hc);low=std::hypot(ls,lc);check(high>30&&high>low*2,"phase vocoder octave frequency");}
  }
+
+ {
+  for(int offset:{1,37,103,511}){cosmos::CreativeFFT f;f.prepare();f.select(2048);f.schedule=offset;double err=0,energy=0;
+   for(int j=0;j<12288;++j){float in=.2f*std::sin(j*.031f),v[2]={in,-in};f.tick(v,80,.5f,0,false,48000);if(j>=8192){float expected=.2f*std::sin((j-2048)*.031f);err+=std::abs(v[0]-expected)+std::abs(v[1]+expected);energy+=2*std::abs(expected);}}
+   check(err/std::max(energy,1e-9)<2e-4,"staggered FFT latency and stereo reconstruction");
+  }
+  cosmos::FxAlignment a;a.prepare(4096);for(int j=0;j<12000;++j){float l=.3f,r=-.3f;a.tick(l,r,j<5000?512:2048);if(j>=4096)check(std::abs(l-.3f)<1e-6f&&std::abs(r+.3f)<1e-6f,"alignment history retained during switch");}
+  int trimmed=0;for(int type=1;type<cosmos::fxTypes;++type)for(int profile=1;profile<=3;++profile){float g=cosmos::fxProfileTrim(type,profile);check(g>0&&g<=1,"profile trim safe");trimmed+=g<1;}check(trimmed==47,"47 calibrated profiles");
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }
