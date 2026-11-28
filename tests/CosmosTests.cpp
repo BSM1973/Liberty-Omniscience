@@ -10,6 +10,7 @@
 void check(bool ok,const char* what){if(!ok){std::cerr<<what<<"\n";std::exit(1);}}
 static_assert(sizeof(cosmos::Engine)<4096,"Engine voice storage must not live on the stack");
 int main(){
+ std::cerr<<"CosmosFoundation: starting DSP qualification"<<std::endl;
  {
   cosmos::Engine e;e.prepare(48000);cosmos::Patch p;
   for(auto& l:p.layer)for(auto& o:l.osc){o.mode=cosmos::OscMode::granular;o.level=.15f;o.grain.source=1;o.grain.size=30;o.grain.density=20;}
@@ -457,16 +458,16 @@ int main(){
   }
  }
  {
- cosmos::FxRack rack;cosmos::FxRackState state;std::array<float,8> macros{};float l=.25f,r=-.5f;state.tick(l,r,rack,48000,macros);check(l==.25f&&r==-.5f,"FX empty rack identity");
- for(int type=1;type<49;++type){state={};rack={};rack.slots[0].type=type;rack.slots[0].enabled=true;for(int j=0;j<2048;++j){l=.35f*std::sin(j*.03f);r=-l;state.tick(l,r,rack,48000,macros);check(std::isfinite(l)&&std::isfinite(r),"FX finite");}rack.slots[0].enabled=false;for(int j=0;j<512;++j){l=.25f;r=-.5f;state.tick(l,r,rack,48000,macros);}check(l==.25f&&r==-.5f,"FX bypass ramp reaches dry");}
+ cosmos::FxRack rack;auto stateStorage=std::make_unique<cosmos::FxRackState>();auto& state=*stateStorage;std::array<float,8> macros{};float l=.25f,r=-.5f;state.tick(l,r,rack,48000,macros);check(l==.25f&&r==-.5f,"FX empty rack identity");
+ for(int type=1;type<49;++type){for(auto& slot:state.slots)slot.reset();rack={};rack.slots[0].type=type;rack.slots[0].enabled=true;for(int j=0;j<2048;++j){l=.35f*std::sin(j*.03f);r=-l;state.tick(l,r,rack,48000,macros);check(std::isfinite(l)&&std::isfinite(r),"FX finite");}rack.slots[0].enabled=false;for(int j=0;j<512;++j){l=.25f;r=-.5f;state.tick(l,r,rack,48000,macros);}check(l==.25f&&r==-.5f,"FX bypass ramp reaches dry");}
  auto a=std::make_unique<cosmos::Engine>(),b=std::make_unique<cosmos::Engine>();a->prepare(48000);b->prepare(48000);cosmos::Patch p,q;p.fx[4].slots[0]={1,true,1,1,1,1,.5f,0,0};a->noteOn(0,60,.8f);b->noteOn(0,60,.8f);std::array<float,1024> x{},y{},xx{},yy{};a->render(x.data(),y.data(),1024,p);b->render(xx.data(),yy.data(),1024,q);check(std::abs(x[800]-4*xx[800])<1e-5f,"master gain effect actual engine");
  }
  {
- for(double sr:{44100.,48000.,96000.,192000.})for(int type=9;type<49;++type){cosmos::FxSlotState s;cosmos::FxParams p;p.enabled=true;p.type=type;p.a=.3f;p.b=.8f;p.autoGain=true;p.quality=2;std::array<float,8> macros{};for(int j=0;j<4096;++j){float l=.8f*std::sin(j*.3f),r=.7f*std::sin(j*.21f);s.tick(l,r,p,sr,macros);check(std::isfinite(l)&&std::isfinite(r)&&std::isfinite(s.reduction),"FX analog dynamics finite");}p.enabled=false;for(int j=0;j<2048;++j){float l=.2f,r=.3f;s.tick(l,r,p,sr,macros);if(j==2047)check(l==.2f&&r==.3f,"FX new bypass");}}
- cosmos::FxSlotState s;cosmos::FxParams p;p.enabled=true;p.type=14;p.a=.5f;std::array<float,8> macros{};float l=0,r=0;for(int j=0;j<1024;++j){l=.8f;r=-.6f;s.tick(l,r,p,48000,macros);}check(std::abs(l-.0316228f)<1e-5f&&s.reduction>20,"linked limiter ceiling");check(std::abs(r/l+.75f)<1e-4f,"limiter stereo link");
+ for(double sr:{44100.,48000.,96000.,192000.})for(int type=9;type<49;++type){auto slotStorage=std::make_unique<cosmos::FxSlotState>();auto& s=*slotStorage;cosmos::FxParams p;p.enabled=true;p.type=type;p.a=.3f;p.b=.8f;p.autoGain=true;p.quality=2;std::array<float,8> macros{};for(int j=0;j<4096;++j){float l=.8f*std::sin(j*.3f),r=.7f*std::sin(j*.21f);s.tick(l,r,p,sr,macros);check(std::isfinite(l)&&std::isfinite(r)&&std::isfinite(s.reduction),"FX analog dynamics finite");}p.enabled=false;for(int j=0;j<2048;++j){float l=.2f,r=.3f;s.tick(l,r,p,sr,macros);if(j==2047)check(l==.2f&&r==.3f,"FX new bypass");}}
+ auto slotStorage=std::make_unique<cosmos::FxSlotState>();auto& s=*slotStorage;cosmos::FxParams p;p.enabled=true;p.type=14;p.a=.5f;std::array<float,8> macros{};float l=0,r=0;for(int j=0;j<1024;++j){l=.8f;r=-.6f;s.tick(l,r,p,48000,macros);}check(std::abs(l-.0316228f)<1e-5f&&s.reduction>20,"linked limiter ceiling");check(std::abs(r/l+.75f)<1e-4f,"limiter stereo link");
  }
  {
- for(double sr:{44100.,48000.,96000.,192000.})for(int type=29;type<49;++type){cosmos::FxSlotState s;s.prepare();cosmos::FxParams p;p.enabled=true;p.type=type;p.a=.4f;p.b=.8f;p.sync=true;p.stereo=.75f;std::array<float,8> macros{};double diff=0;for(int j=0;j<20000;++j){float dry=.4f*std::sin(j*.07f),l=dry,r=.3f*std::sin(j*.13f);s.tick(l,r,p,sr,macros);check(std::isfinite(l)&&std::isfinite(r),"modulation finite");diff+=std::abs(l-dry);}check(diff>.01,"modulation changes signal");p.enabled=false;for(int j=0;j<2048;++j){float l=.2f,r=.3f;s.tick(l,r,p,sr,macros);if(j==2047)check(l==.2f&&r==.3f,"modulation bypass");}}
+ for(double sr:{44100.,48000.,96000.,192000.})for(int type=29;type<49;++type){auto slotStorage=std::make_unique<cosmos::FxSlotState>();auto& s=*slotStorage;s.prepare();cosmos::FxParams p;p.enabled=true;p.type=type;p.a=.4f;p.b=.8f;p.sync=true;p.stereo=.75f;std::array<float,8> macros{};double diff=0;for(int j=0;j<20000;++j){float dry=.4f*std::sin(j*.07f),l=dry,r=.3f*std::sin(j*.13f);s.tick(l,r,p,sr,macros);check(std::isfinite(l)&&std::isfinite(r),"modulation finite");diff+=std::abs(l-dry);}check(diff>.01,"modulation changes signal");p.enabled=false;for(int j=0;j<2048;++j){float l=.2f,r=.3f;s.tick(l,r,p,sr,macros);if(j==2047)check(l==.2f&&r==.3f,"modulation bypass");}}
  check(std::abs(cosmos::modulationHz(.5f,true,120)-2.f)<1e-6f,"tempo modulation division");
 
  check(std::abs(cosmos::delaySeconds(10.f/15,true,120)-.5f)<1e-6f,"quarter note echo");
@@ -474,7 +475,7 @@ int main(){
  check(std::abs(cosmos::delaySeconds(12.f/15,true,120)-.75f)<1e-6f,"dotted echo");
  for(double sr:{44100.,48000.,96000.,192000.}){
   for(int type=49;type<64;++type){
-   cosmos::FxSlotState s;s.prepare(sr);cosmos::FxParams p;p.enabled=true;p.type=type;p.a=.35f;p.b=1;p.delayFeedbackR=.72f;std::array<float,8> m{};
+   auto slotStorage=std::make_unique<cosmos::FxSlotState>();auto& s=*slotStorage;s.prepare(sr);cosmos::FxParams p;p.enabled=true;p.type=type;p.a=.35f;p.b=1;p.delayFeedbackR=.72f;std::array<float,8> m{};
    double tail=0;const int n=int(sr*.4);
    for(int j=0;j<n;++j){float l=j<int(sr*.05)?(.7f*std::sin(j*.07f)):0,r=0;s.tick(l,r,p,sr,m);check(std::isfinite(l)&&std::isfinite(r)&&std::abs(l)<=4.01f&&std::abs(r)<=4.01f,"echo bounded");if(j>int(sr*.06))tail+=std::abs(l)+std::abs(r);}
    check(tail>.001,"echo audible tail");p.delayFreeze=true;
@@ -491,7 +492,7 @@ int main(){
  std::array<double,15> signatures{};
  for(double sr:{44100.,48000.,96000.,192000.}){
   for(int type=64;type<79;++type){
-   cosmos::FxSlotState s;s.prepare(sr);cosmos::FxParams p;p.type=type;p.enabled=true;p.a=.6f;p.b=.75f;p.stereo=.6f;p.delayFeedbackR=.65f;p.delayTone=.7f;
+   auto slotStorage=std::make_unique<cosmos::FxSlotState>();auto& s=*slotStorage;s.prepare(sr);cosmos::FxParams p;p.type=type;p.enabled=true;p.a=.6f;p.b=.75f;p.stereo=.6f;p.delayFeedbackR=.65f;p.delayTone=.7f;
    std::array<float,8> m{};double tail=0,weighted=0;
    for(int j=0;j<int(sr*.65);++j){
     float l=j<int(sr*.025)? .45f*std::sin(j*.09f):0,r=j<int(sr*.025)? .3f*std::cos(j*.071f):0;
@@ -508,6 +509,7 @@ int main(){
  }
 
  {
+ std::cerr<<"CosmosFoundation: spectral DSP"<<std::endl;
  // FFT round-trip, streaming latency and amplitude reconstruction.
  cosmos::CreativeFFT fft;fft.prepare();std::array<cosmos::CreativeFFT::C,512> x{};
  for(int j=0;j<512;++j)x[j]={std::sin(j*.13f),std::cos(j*.07f)};
@@ -520,7 +522,7 @@ int main(){
  for(int j=0;j<8192;++j){float v[2]={.3f*std::sin(cosmos::CreativeFFT::tau*16*j/512),0};fft.tick(v,82,.5f+1.f/64.f,1,false,48000);if(j>=4096){double p=cosmos::CreativeFFT::tau*j/512;shiftedSin+=v[0]*std::sin(17*p);shiftedCos+=v[0]*std::cos(17*p);originalSin+=v[0]*std::sin(16*p);originalCos+=v[0]*std::cos(16*p);}}
  check(std::hypot(shiftedSin,shiftedCos)>400&&std::hypot(originalSin,originalCos)<10,"spectral shift one FFT bin");
  for(double sr:{44100.,48000.,96000.,192000.})for(int type=79;type<cosmos::fxTypes;++type){
-  cosmos::FxSlotState s;s.prepare(sr);cosmos::FxParams p;p.enabled=true;p.type=type;p.a=.72f;p.b=.76f;p.sync=true;
+  auto slotStorage=std::make_unique<cosmos::FxSlotState>();auto& s=*slotStorage;s.prepare(sr);cosmos::FxParams p;p.enabled=true;p.type=type;p.a=.72f;p.b=.76f;p.sync=true;
   std::array<float,8> m{};double total=0,diff=0;
   for(int j=0;j<int(sr*.3);++j){float dry=.32f*std::sin(j*.064f)+.15f*std::sin(j*.171f),l=dry,r=.22f*std::cos(j*.091f);s.tick(l,r,p,sr,m);check(std::isfinite(l)&&std::isfinite(r)&&std::abs(l)<=4.01f&&std::abs(r)<=4.01f,"creative finite bounded");if(j>int(sr*.15)){total+=std::abs(l)+std::abs(r);diff+=std::abs(l-dry);}}
   check(total>1e-4&&diff>1e-4,"creative processes audio");
@@ -529,19 +531,21 @@ int main(){
  }
 
  {
+ std::cerr<<"CosmosFoundation: SIMD and latency"<<std::endl;
  {std::array<float,257> a{},b{},c{},w{};for(int j=0;j<257;++j){a[j]=b[j]=.1f*std::sin(j*.2f);c[j]=std::cos(j*.07f);w[j]=.5f+.5f*std::sin(j*.03f);}cosmos::fxWindowAdd(a.data(),c.data(),w.data(),257,0);cosmos::fxWindowAdd(b.data(),c.data(),w.data(),257,2);for(int j=0;j<257;++j)check(std::abs(a[j]-b[j])<2e-7f,"FFT overlap SIMD A/B");}
- {cosmos::CreativeFFT f;f.prepare();for(int size:{512,1024,2048,4096}){f.select(size);std::array<cosmos::CreativeFFT::C,4096> a{},b{};for(int j=0;j<size;++j)a[j]=b[j]={std::sin(j*.123f),std::cos(j*.043f)};f.fft(a,false,0);f.fft(b,false,2);for(int j=0;j<size;++j)check(std::abs(a[j]-b[j])<.002f,"FFT butterfly SIMD A/B");}}
+ {cosmos::CreativeFFT f;f.prepare();for(int size:{512,1024,2048,4096}){f.select(size);auto aStorage=std::make_unique<std::array<cosmos::CreativeFFT::C,4096>>(),bStorage=std::make_unique<std::array<cosmos::CreativeFFT::C,4096>>();auto& a=*aStorage;auto& b=*bStorage;for(int j=0;j<size;++j)a[j]=b[j]={std::sin(j*.123f),std::cos(j*.043f)};f.fft(a,false,0);f.fft(b,false,2);for(int j=0;j<size;++j)check(std::abs(a[j]-b[j])<.002f,"FFT butterfly SIMD A/B");}}
  for(int size:{512,1024,2048,4096}){
   cosmos::CreativeFFT f;f.prepare();f.select(size);
   double err=0,energy=0;for(int j=0;j<size*5;++j){float x=.25f*std::sin(j*.071f),v[2]={x,x};f.tick(v,80,.5f,0,false,48000);if(j>=size*3){float expected=.25f*std::sin((j-size)*.071f);err+=std::abs(v[0]-expected);energy+=std::abs(expected);}}
   check(err/std::max(energy,1e-9)<2e-4,"HD FFT overlap add");
-  cosmos::FxSlotState s;s.prepare();cosmos::FxParams p;p.type=80;p.enabled=true;p.mix=0;p.fftQuality=int(std::log2(size/512));std::array<float,8> m{};for(int j=0;j<=size;++j){float l=j==0?1:0,r=l;s.tick(l,r,p,48000,m);check(std::abs(l-(j==size?1.f:0.f))<1e-6f,"aligned spectral dry");}
+  auto slotStorage=std::make_unique<cosmos::FxSlotState>();auto& s=*slotStorage;s.prepare();cosmos::FxParams p;p.type=80;p.enabled=true;p.mix=0;p.fftQuality=int(std::log2(size/512));std::array<float,8> m{};for(int j=0;j<=size;++j){float l=j==0?1:0,r=l;s.tick(l,r,p,48000,m);check(std::abs(l-(j==size?1.f:0.f))<1e-6f,"aligned spectral dry");}
  }
  cosmos::Patch p;p.fx[0].slots[0].enabled=true;p.fx[0].slots[0].type=80;p.fx[0].slots[0].fftQuality=2;p.fx[0].slots[1]=p.fx[0].slots[0];p.fx[4].slots[0]=p.fx[0].slots[0];check(cosmos::Engine::latency(p)==6144,"layer plus master latency");p.fx[0].parallel=true;check(cosmos::Engine::latency(p)==4096,"parallel rack latency");
- cosmos::FxRack r;r.parallel=true;r.slots[0].type=80;r.slots[0].enabled=true;r.slots[0].mix=0;r.slots[1].type=1;r.slots[1].enabled=true;r.slots[1].mix=0;cosmos::FxRackState state;for(auto& s:state.slots)s.prepare();std::array<float,8> m{};for(int j=0;j<1024;++j){float l=j==0?1:0,rr=l;state.tick(l,rr,r,48000,m);check(std::abs(l-(j==512?1.f:0.f))<1e-6f,"parallel aligned impulse");}
+ cosmos::FxRack r;r.parallel=true;r.slots[0].type=80;r.slots[0].enabled=true;r.slots[0].mix=0;r.slots[1].type=1;r.slots[1].enabled=true;r.slots[1].mix=0;auto stateStorage=std::make_unique<cosmos::FxRackState>();auto& state=*stateStorage;for(auto& s:state.slots)s.prepare();std::array<float,8> m{};for(int j=0;j<1024;++j){float l=j==0?1:0,rr=l;state.tick(l,rr,r,48000,m);check(std::abs(l-(j==512?1.f:0.f))<1e-6f,"parallel aligned impulse");}
  }
 
  {
+ std::cerr<<"CosmosFoundation: FIR and pitch"<<std::endl;
  std::array<float,cosmos::CreativeFFT::maxBins> m{},result{};
  for(int j=0;j<1025;++j)m[j]=.2f+std::abs(std::sin(j*.135f));
  for(int radius:{1,12,49}){cosmos::CreativeFFT::triangularBlur(m.data(),result.data(),1025,radius);for(int k=0;k<1025;++k){double sum=0,w=0;for(int j=std::max(0,k-radius);j<=std::min(1024,k+radius);++j){double z=radius+1-std::abs(j-k);sum+=m[j]*z;w+=z;}check(std::abs(result[k]-sum/w)<2e-6,"linear spectral blur equivalent");}}

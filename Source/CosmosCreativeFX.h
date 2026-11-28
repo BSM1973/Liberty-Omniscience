@@ -16,7 +16,10 @@ struct CreativeFFT {
   std::array<float,maxN> input{},output{},real{};
   std::array<C,maxN> work{},original{};
   std::array<float,maxBins> held{},prevPhase{},heldPhase{},advance{},envelope{},carrierPhase{},pitchPhase{},harmonyPhase{};
+  std::array<float,maxBins> magScratch{},argScratch{},stepScratch{},blurScratch{};
+  std::array<double,maxBins+1> sumScratch{},weightedScratch{};
   bool captured=false,wasFreeze=false,phaseReady=false;
+  void reset()noexcept{input.fill(0);output.fill(0);real.fill(0);work.fill(C{});original.fill(C{});held.fill(0);prevPhase.fill(0);heldPhase.fill(0);advance.fill(0);envelope.fill(0);carrierPhase.fill(0);pitchPhase.fill(0);harmonyPhase.fill(0);captured=wasFreeze=phaseReady=false;}
  };
  std::vector<Channel> channels;
  struct Plan{std::array<std::array<float,maxN>,4> window{};std::array<C,maxN-1> twiddle{};std::array<std::array<int,maxBins>,4> band{};Plan(){for(int q=0;q<4;++q){int size=512<<q;for(int j=0;j<size;++j)window[q][j]=.5f-.5f*std::cos(tau*j/size);for(int k=1;k<=size/2;++k)band[q][k]=std::clamp(int(24*std::log2(1.f+float(k))/std::log2(float(size/2+1))),0,23);}for(int len=2;len<=maxN;len*=2)for(int j=0;j<len/2;++j)twiddle[len/2-1+j]=C(std::cos(-tau*j/len),std::sin(-tau*j/len));}};
@@ -28,7 +31,7 @@ struct CreativeFFT {
   preparedPlan=&plan();
   reset();
  }
- void reset()noexcept{pos=filled=clock=0;meter={};for(auto& c:channels)c=Channel{};}
+ void reset()noexcept{pos=filled=clock=0;meter={};for(auto& c:channels)c.reset();}
  void select(int size)noexcept{size=std::clamp(size,512,maxN);if(size!=n){n=size;hop=n/4;bins=n/2+1;quality=n==512?0:n==1024?1:n==2048?2:3;reset();}}
  template<size_t N> void fft(std::array<C,N>& a,bool inverse,int mode=2)const noexcept{
   const int n=std::min(int(N),this->n);
@@ -40,8 +43,8 @@ struct CreativeFFT {
  float magnitudeAt(const std::array<float,maxBins>& a,float x)const noexcept{
   if(x<0||x>bins-1)return 0;int k=int(x);return std::lerp(a[k],a[std::min(k+1,bins-1)],x-k);
  }
- static void triangularBlur(const float* mag,float* result,int bins,int radius)noexcept{
-  std::array<double,maxBins+1> sums{},weighted{};
+ static void triangularBlur(const float* mag,float* result,int bins,int radius,double* sums,double* weighted)noexcept{
+  sums[0]=weighted[0]=0;
   for(int k=0;k<bins;++k){sums[k+1]=sums[k]+mag[k];weighted[k+1]=weighted[k]+double(k)*mag[k];}
   for(int k=0;k<bins;++k){int lo=std::max(0,k-radius),hi=std::min(bins-1,k+radius);
    double left=(radius+1-k)*(sums[k+1]-sums[lo])+weighted[k+1]-weighted[lo];
@@ -50,10 +53,11 @@ struct CreativeFFT {
    result[k]=float(std::max(0.,(left+right)/weight));
   }
  }
+ static void triangularBlur(const float* mag,float* result,int bins,int radius)noexcept{std::array<double,maxBins+1> sums{},weighted{};triangularBlur(mag,result,bins,radius,sums.data(),weighted.data());}
  void frame(Channel& c,int type,float a,float b,bool freeze,float sr)noexcept{
   const auto& window=preparedPlan->window[quality];for(int j=0;j<n;++j)c.work[j]=C(c.input[(pos+j)%n]*window[j],0);
   fft(c.work,false);std::copy_n(c.work.begin(),n,c.original.begin());
-  std::array<float,maxBins> mag{},arg{},step{},blurred{};
+  auto& mag=c.magScratch;auto& arg=c.argScratch;auto& step=c.stepScratch;auto& blurred=c.blurScratch;
   const bool pitch=type>=85&&type<=87,needsPhase=type==79||pitch;const bool firstPhase=!c.phaseReady;
   float total=0;
   for(int k=0;k<bins;++k){
@@ -70,7 +74,7 @@ struct CreativeFFT {
   if(pitch||type==88||type==89){
    const int radius=std::max(2,int(400*n/sr));float sum=0;int lo=0,hi=std::min(bins-1,radius);for(int j=lo;j<=hi;++j)sum+=mag[j];for(int k=0;k<bins;++k){int l=std::max(0,k-radius),h=std::min(bins-1,k+radius);while(lo<l)sum-=mag[lo++];while(hi<h)sum+=mag[++hi];c.envelope[k]=std::max(0.f,sum/(hi-lo+1));}
   }
-  if(type==80&&b>0)triangularBlur(mag.data(),blurred.data(),bins,1+int(a*12*n/512.f));
+  if(type==80&&b>0)triangularBlur(mag.data(),blurred.data(),bins,1+int(a*12*n/512.f),c.sumScratch.data(),c.weightedScratch.data());
   const float pitchRatio=std::exp2(std::round((2*a-1)*12.f)/12.f);
   const float gateThreshold=.02f*(n/512.f)*std::pow(1000.f,a),compThreshold=.1f*(n/512.f)*std::pow(100.f,a);
   const int shift=int(std::round((2*a-1)*32*n/512.f));const C shiftPhase=std::polar(1.f,tau*shift*float((clock/hop)%4)*hop/n);
