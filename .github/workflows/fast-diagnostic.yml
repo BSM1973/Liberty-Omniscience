@@ -122,8 +122,7 @@ jobs:
             ./build/CosmosBenchmark --nexus > cosmos-nexus-performance.csv
           fi
           cat cosmos-nexus-performance.csv
-      - name: Optional NEXUS 10-minute endurance
-        if: github.event_name == 'workflow_dispatch' && inputs.nexus_long
+      - name: NEXUS 10-minute rendered endurance
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == "Windows" ]]; then
@@ -171,12 +170,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
         with:
-          name: Omniscience-v0.6.6-macOS-ARM64
+          name: Omniscience-v0.6.7-macOS-ARM64
           path: Omniscience-macOS-ARM64.zip
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
-          name: Omniscience-v0.6.6-Windows-x64
+          name: Omniscience-v0.6.7-Windows-x64
           path: Omniscience-Windows-x64.zip
           if-no-files-found: error
