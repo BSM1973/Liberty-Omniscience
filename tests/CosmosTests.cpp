@@ -1,5 +1,6 @@
 #include "CosmosEngine.h"
 #include "CosmosMotion.h"
+#include "CosmosTrajectory.h"
 #include "CosmosParallelBench.h"
 #include <iostream>
 #include <vector>
@@ -437,6 +438,10 @@ int main(){
  }
  {
  cosmos::MotionRecorder rec;rec.start(4,true);for(int j=0;j<=1024;++j)rec.capture(float(j)/1024,.25f,4./1024);check(rec.clip.count==1024,"motion capacity");auto a=rec.clip.at(.5,0);check(std::abs(a[0]-.5f)<.01f&&std::abs(a[1]-.25f)<1e-6f,"motion interpolation");auto b=rec.clip.at(1.25,1),c=rec.clip.at(.25,2),d=rec.clip.at(1.25,3);check(std::abs(b[0]-.25f)<.01f&&std::abs(c[0]-.75f)<.01f&&std::abs(d[0]-.75f)<.01f,"motion playback modes");auto f=cosmos::motionTransform({1,.5f},1,90,false,false);check(std::abs(f[0]-.5f)<1e-5f&&std::abs(f[1]-1)<1e-5f,"motion rotation");rec.start(8,false);rec.capture(.2f,.8f,.1);rec.finish();check(rec.clip.count>0&&rec.clip.duration>0,"motion early stop");
+ }
+ {
+ for(int i=0;i<50;++i){auto tr=cosmos::factoryTrajectory(i);check(tr.count==96,"trajectory factory size");auto c=tr.clip(4,true);for(int j=0;j<c.count;++j)check(std::isfinite(c.x[j])&&c.x[j]>=0&&c.x[j]<=1&&c.y[j]>=0&&c.y[j]<=1,"trajectory bounded");if(tr.closed)check(std::abs(c.x[0]-c.x[c.count-1])<1e-6f&&std::abs(c.y[0]-c.y[c.count-1])<1e-6f,"closed trajectory");tr.curve=true;auto q=tr.at(.42f);check(std::isfinite(q[0])&&std::isfinite(q[1]),"Bezier trajectory");}
+ auto q=cosmos::shapeTrajectory({1,0},.5f,.5f,.5f,.5f,0,0);check(std::abs(q[0]-.75f)<1e-6f&&std::abs(q[1]-.25f)<1e-6f,"trajectory scale");
  }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }
