@@ -11,6 +11,7 @@
 #include "CosmosModEnvelope.h"
 #include "CosmosMatrix.h"
 #include "CosmosNexus.h"
+#include "CosmosFX.h"
 
 namespace cosmos {
 constexpr int layers = 4, voices = 32;
@@ -27,7 +28,7 @@ struct Layer {
     Layer(){osc[0].level=1;}
 };
 struct MorphParams {bool enabled=false;float amount=1;int curve=0;std::array<bool,5> family{true,true,true,true,true};bool protectTune=true,protectGain=true;};
-struct Patch { std::array<Layer,layers> layer{}; std::array<LfoParams,lfoCount> lfo{}; std::array<ModEnvParams,modEnvCount> modEnv{};std::array<MatrixRoute,matrixCount> matrix{};std::array<float,8> macros{};NexusParams nexus{};MorphParams morph{}; float master=.7f; double bpm=120.,ppq=0;bool transportValid=false; bool experimentalGrouped=false; bool experimentalTiled=false; int experimentalInterpolation=0; bool experimentalGrainWindow=false; bool experimentalGrainPrepared=false; bool experimentalAnalog=false; bool experimentalEnv=false;bool experimentalMatrixFast=true;bool experimentalNexusShared=true; };
+struct Patch { std::array<FxRack,fxRacks> fx{};std::array<Layer,layers> layer{}; std::array<LfoParams,lfoCount> lfo{}; std::array<ModEnvParams,modEnvCount> modEnv{};std::array<MatrixRoute,matrixCount> matrix{};std::array<float,8> macros{};NexusParams nexus{};MorphParams morph{}; float master=.7f; double bpm=120.,ppq=0;bool transportValid=false; bool experimentalGrouped=false; bool experimentalTiled=false; int experimentalInterpolation=0; bool experimentalGrainWindow=false; bool experimentalGrainPrepared=false; bool experimentalAnalog=false; bool experimentalEnv=false;bool experimentalMatrixFast=true;bool experimentalNexusShared=true; };
 // Interpolate continuous layer parameters without mutating the stored patch or switching engines.
 inline void applyMorph(Patch& p,float x,float y)noexcept{
  const auto m=p.morph;if(!m.enabled||m.amount<=0)return;
@@ -124,6 +125,7 @@ class Engine {
     double sr=48000;
     std::uint64_t counter=0;
     std::array<double,lfoCount> freeCycles{};
+    std::array<FxRackState,fxRacks> fxState{};
     NexusMotion nexusMotion;std::array<float,128> nexusCC{};
     // Allocate the fixed voice pool once, outside the audio callback.
     std::vector<Voice> v = std::vector<Voice>(voices);
@@ -133,7 +135,7 @@ class Engine {
     std::vector<MidiTable> midiTables=std::vector<MidiTable>(2);
 public:
     void prepare(double rate) noexcept {sr=std::max(8000.,rate);(void)waveBank();(void)hdBank();(void)factoryGrains();(void)hannLut();(void)sineLut();reset();}
-    void reset() noexcept {for(auto& voice:v)voice.reset();pedal={};bend={};midiTables[0]={};channelPressure={};midiTables[1]={};counter=0;freeCycles={};nexusMotion={};nexusCC.fill(-1);}
+    void reset() noexcept {for(auto& voice:v)voice.reset();pedal={};bend={};midiTables[0]={};channelPressure={};midiTables[1]={};counter=0;freeCycles={};nexusMotion={};nexusCC.fill(-1);fxState={};}
     void noteOn(int ch,int note,float velocity) noexcept {
       if(ch<0||ch>=16)return;
       if(velocity<=0){noteOff(ch,note);return;}
@@ -172,10 +174,21 @@ public:
     bool voiceActive(int index)const noexcept{return index>=0&&index<voices&&v[size_t(index)].active;}
     std::array<float,2> nexusPosition()const noexcept{return {nexusMotion.x,nexusMotion.y};}
     std::array<float,4> nexusGains(bool power)const noexcept{return nexusMotion.weights(power);}
-    void render(float* left,float* right,int n,const Patch& patch) noexcept {if(n<=0)return;if(patch.morph.enabled&&patch.morph.amount>0){auto transformed=patch;auto target=nexusTarget(patch.nexus,patch.macros,nexusCC);auto motion=nexusMotion;float step=patch.nexus.smooth<=0?1.f:float(1-std::exp(-1000./(sr*patch.nexus.smooth)));motion.tick(target[0],target[1],patch.nexus.enabled?1.f:0.f,step);applyMorph(transformed,motion.x,motion.y);renderRange(left,right,n,transformed,0,voices);}else renderRange(left,right,n,patch,0,voices);auto target=nexusTarget(patch.nexus,patch.macros,nexusCC);float step=patch.nexus.smooth<=0?1.f:float(1-std::exp(-1000./(sr*patch.nexus.smooth)));for(int j=0;j<n;++j)nexusMotion.tick(target[0],target[1],patch.nexus.enabled?1.f:0.f,step);for(int i=0;i<lfoCount;++i)if(patch.lfo[i].mode!=0){freeCycles[i]+=n*lfoHz(patch.lfo[i],patch.bpm)/sr;if(freeCycles[i]>=4294967296.)freeCycles[i]-=4294967296.;}}
+    void renderSynth(float* left,float* right,int n,const Patch& patch,float* const* buses=nullptr) noexcept {if(n<=0)return;if(patch.morph.enabled&&patch.morph.amount>0){auto transformed=patch;auto target=nexusTarget(patch.nexus,patch.macros,nexusCC);auto motion=nexusMotion;float step=patch.nexus.smooth<=0?1.f:float(1-std::exp(-1000./(sr*patch.nexus.smooth)));motion.tick(target[0],target[1],patch.nexus.enabled?1.f:0.f,step);applyMorph(transformed,motion.x,motion.y);renderRange(left,right,n,transformed,0,voices,buses);}else renderRange(left,right,n,patch,0,voices,buses);auto target=nexusTarget(patch.nexus,patch.macros,nexusCC);float step=patch.nexus.smooth<=0?1.f:float(1-std::exp(-1000./(sr*patch.nexus.smooth)));for(int j=0;j<n;++j)nexusMotion.tick(target[0],target[1],patch.nexus.enabled?1.f:0.f,step);for(int i=0;i<lfoCount;++i)if(patch.lfo[i].mode!=0){freeCycles[i]+=n*lfoHz(patch.lfo[i],patch.bpm)/sr;if(freeCycles[i]>=4294967296.)freeCycles[i]-=4294967296.;}}
+    void render(float* left,float* right,int n,const Patch& patch)noexcept{
+      if(n<=0)return;bool layerFX=false;for(int k=0;k<layers;++k)layerFX|=fxState[k].active(patch.fx[k]);
+      if(!layerFX){if(!fxState[4].active(patch.fx[4])){renderSynth(left,right,n,patch);return;}}
+      constexpr int capacity=1024;std::array<std::array<float,capacity>,8> buffer;
+      std::array<float,capacity> mixL,mixR;std::array<float*,8> ptr;for(int j=0;j<8;++j)ptr[j]=buffer[j].data();
+      for(int offset=0;offset<n;offset+=capacity){int count=std::min(capacity,n-offset);std::fill_n(mixL.data(),count,0.f);std::fill_n(mixR.data(),count,0.f);auto p=patch;if(p.transportValid)p.ppq+=offset*p.bpm/(60*sr);
+        if(layerFX){for(auto& x:buffer)std::fill_n(x.data(),count,0.f);renderSynth(mixL.data(),mixR.data(),count,p,ptr.data());for(int i=0;i<count;++i){float l=0,r=0;for(int k=0;k<layers;++k){float a=buffer[k*2][i],b=buffer[k*2+1][i];fxState[k].tick(a,b,p.fx[k],sr,p.macros);l+=a;r+=b;}mixL[i]=l;mixR[i]=r;}}
+        else renderSynth(mixL.data(),mixR.data(),count,p);
+        for(int i=0;i<count;++i){fxState[4].tick(mixL[i],mixR[i],p.fx[4],sr,p.macros);left[offset+i]+=mixL[i];right[offset+i]+=mixR[i];}
+      }
+    }
     // Disjoint ranges may be processed concurrently with immutable patch and MIDI state.
     // Caller must join all tasks before modifying MIDI state or reading telemetry.
-    void renderRange(float* left,float* right,int n,const Patch& patch,int first,int last) noexcept {
+    void renderRange(float* left,float* right,int n,const Patch& patch,int first,int last,float* const* buses=nullptr) noexcept {
       if(n<=0)return;
       bool any=false;for(int i=std::max(0,first);i<std::min(voices,last);++i)any|=v[size_t(i)].active;
       if(!any)return;
@@ -275,7 +288,7 @@ public:
             a.low[k]+=voiceAlpha[k]*(x-a.low[k]);
             float filtered=p.filter1.model==0?a.low[k]:a.filters[k][0].tick(x,voiceFilters[k][0]);
             if(p.filter2.model!=1){float second=a.filters[k][1].tick(p.filterParallel?x:filtered,voiceFilters[k][1]);filtered=p.filterParallel?std::lerp(filtered,second,p.filterMix):second;}
-            float s=filtered*p.filterTrim*env;if(nxActive)s*=nxGain[k];if(modulation[k][2]!=0)s*=std::clamp(1.f+modulation[k][2],0.f,2.f);if(modulation[k][3]!=0){double angle=(std::clamp(p.pan+modulation[k][3],-1.f,1.f)+1)*pi*.25;float gain=p.enabled?p.gain:0.f;l+=s*gain*float(std::cos(angle));r+=s*gain*float(std::sin(angle));}else{l+=s*gl[k];r+=s*gr[k];}
+            float s=filtered*p.filterTrim*env;if(nxActive)s*=nxGain[k];if(modulation[k][2]!=0)s*=std::clamp(1.f+modulation[k][2],0.f,2.f);if(modulation[k][3]!=0){double angle=(std::clamp(p.pan+modulation[k][3],-1.f,1.f)+1)*pi*.25;float gain=p.enabled?p.gain:0.f;float sl=s*gain*float(std::cos(angle)),srOut=s*gain*float(std::sin(angle));if(buses){float g=a.velocity*.12f*patch.master;buses[2*k][i]+=sl*g;buses[2*k+1][i]+=srOut*g;}else{l+=sl;r+=srOut;}}else{float sl=s*gl[k],srOut=s*gr[k];if(buses){float g=a.velocity*.12f*patch.master;buses[2*k][i]+=sl*g;buses[2*k+1][i]+=srOut*g;}else{l+=sl;r+=srOut;}}
           }
           if(!alive){a.active=false;break;}
           const float g=a.velocity*.12f*patch.master;left[i]+=l*g;right[i]+=r*g;

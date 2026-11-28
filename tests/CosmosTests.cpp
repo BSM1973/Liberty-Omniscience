@@ -456,5 +456,10 @@ int main(){
   for(int block=0;block<8;++block){p.nexus.x=block/7.f;p.nexus.y=1-p.nexus.x;auto ref=p;ref.experimentalNexusShared=false;std::vector<float> l(n),r(n),ll(n),rr(n);a->render(l.data(),r.data(),n,p);b->render(ll.data(),rr.data(),n,ref);for(int i=0;i<n;++i)check(std::abs(l[i]-ll[i])<1e-6f&&std::abs(r[i]-rr[i])<1e-6f,"shared NEXUS/MORPH/LFO/matrix A/B");p.ppq+=n*123./(48000.*60);}
   }
  }
+ {
+ cosmos::FxRack rack;cosmos::FxRackState state;std::array<float,8> macros{};float l=.25f,r=-.5f;state.tick(l,r,rack,48000,macros);check(l==.25f&&r==-.5f,"FX empty rack identity");
+ for(int type=1;type<cosmos::fxTypes;++type){state={};rack={};rack.slots[0].type=type;rack.slots[0].enabled=true;for(int j=0;j<2048;++j){l=.35f*std::sin(j*.03f);r=-l;state.tick(l,r,rack,48000,macros);check(std::isfinite(l)&&std::isfinite(r),"FX finite");}rack.slots[0].enabled=false;for(int j=0;j<512;++j){l=.25f;r=-.5f;state.tick(l,r,rack,48000,macros);}check(l==.25f&&r==-.5f,"FX bypass ramp reaches dry");}
+ auto a=std::make_unique<cosmos::Engine>(),b=std::make_unique<cosmos::Engine>();a->prepare(48000);b->prepare(48000);cosmos::Patch p,q;p.fx[4].slots[0]={1,true,1,1,1,1,.5f,0,0};a->noteOn(0,60,.8f);b->noteOn(0,60,.8f);std::array<float,1024> x{},y{},xx{},yy{};a->render(x.data(),y.data(),1024,p);b->render(xx.data(),yy.data(),1024,q);check(std::abs(x[800]-4*xx[800])<1e-5f,"master gain effect actual engine");
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }

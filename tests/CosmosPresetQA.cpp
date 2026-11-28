@@ -160,6 +160,6 @@ int main(){
     bool imported=qualifyImports();
     auto guiDir=juce::File::getCurrentWorkingDirectory().getChildFile("cosmos-ui-qa");
     bool layout=guiDir.createDirectory().wasOk()&&cosmosTestLayout(*a,guiDir);
-    std::cout<<"Editor geometry and fifty-one screenshots: "<<(layout?"passed":"FAILED")<<'\n';
+    std::cout<<"Editor geometry and fifty-four screenshots: "<<(layout?"passed":"FAILED")<<'\n';
     return failed||!report||!qualified||!imported||!layout?1:0;
 }
