@@ -125,7 +125,8 @@ class Engine {
     double sr=48000;
     std::uint64_t counter=0;
     std::array<double,lfoCount> freeCycles{};
-    std::array<FxRackState,fxRacks> fxState{};
+    // Allocate the 40 FX states once with the engine, not on the audio thread or engine stack.
+    std::vector<FxRackState> fxState = std::vector<FxRackState>(fxRacks);
     NexusMotion nexusMotion;std::array<float,128> nexusCC{};
     // Allocate the fixed voice pool once, outside the audio callback.
     std::vector<Voice> v = std::vector<Voice>(voices);
@@ -135,7 +136,7 @@ class Engine {
     std::vector<MidiTable> midiTables=std::vector<MidiTable>(2);
 public:
     void prepare(double rate) noexcept {sr=std::max(8000.,rate);(void)waveBank();(void)hdBank();(void)factoryGrains();(void)hannLut();(void)sineLut();reset();}
-    void reset() noexcept {for(auto& voice:v)voice.reset();pedal={};bend={};midiTables[0]={};channelPressure={};midiTables[1]={};counter=0;freeCycles={};nexusMotion={};nexusCC.fill(-1);fxState={};}
+    void reset() noexcept {for(auto& voice:v)voice.reset();pedal={};bend={};midiTables[0]={};channelPressure={};midiTables[1]={};counter=0;freeCycles={};nexusMotion={};nexusCC.fill(-1);for(auto& rack:fxState)rack=FxRackState{};}
     void noteOn(int ch,int note,float velocity) noexcept {
       if(ch<0||ch>=16)return;
       if(velocity<=0){noteOff(ch,note);return;}
