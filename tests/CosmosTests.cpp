@@ -458,16 +458,32 @@ int main(){
  }
  {
  cosmos::FxRack rack;cosmos::FxRackState state;std::array<float,8> macros{};float l=.25f,r=-.5f;state.tick(l,r,rack,48000,macros);check(l==.25f&&r==-.5f,"FX empty rack identity");
- for(int type=1;type<cosmos::fxTypes;++type){state={};rack={};rack.slots[0].type=type;rack.slots[0].enabled=true;for(int j=0;j<2048;++j){l=.35f*std::sin(j*.03f);r=-l;state.tick(l,r,rack,48000,macros);check(std::isfinite(l)&&std::isfinite(r),"FX finite");}rack.slots[0].enabled=false;for(int j=0;j<512;++j){l=.25f;r=-.5f;state.tick(l,r,rack,48000,macros);}check(l==.25f&&r==-.5f,"FX bypass ramp reaches dry");}
+ for(int type=1;type<49;++type){state={};rack={};rack.slots[0].type=type;rack.slots[0].enabled=true;for(int j=0;j<2048;++j){l=.35f*std::sin(j*.03f);r=-l;state.tick(l,r,rack,48000,macros);check(std::isfinite(l)&&std::isfinite(r),"FX finite");}rack.slots[0].enabled=false;for(int j=0;j<512;++j){l=.25f;r=-.5f;state.tick(l,r,rack,48000,macros);}check(l==.25f&&r==-.5f,"FX bypass ramp reaches dry");}
  auto a=std::make_unique<cosmos::Engine>(),b=std::make_unique<cosmos::Engine>();a->prepare(48000);b->prepare(48000);cosmos::Patch p,q;p.fx[4].slots[0]={1,true,1,1,1,1,.5f,0,0};a->noteOn(0,60,.8f);b->noteOn(0,60,.8f);std::array<float,1024> x{},y{},xx{},yy{};a->render(x.data(),y.data(),1024,p);b->render(xx.data(),yy.data(),1024,q);check(std::abs(x[800]-4*xx[800])<1e-5f,"master gain effect actual engine");
  }
  {
- for(double sr:{44100.,48000.,96000.,192000.})for(int type=9;type<cosmos::fxTypes;++type){cosmos::FxSlotState s;cosmos::FxParams p;p.enabled=true;p.type=type;p.a=.3f;p.b=.8f;p.autoGain=true;p.quality=2;std::array<float,8> macros{};for(int j=0;j<4096;++j){float l=.8f*std::sin(j*.3f),r=.7f*std::sin(j*.21f);s.tick(l,r,p,sr,macros);check(std::isfinite(l)&&std::isfinite(r)&&std::isfinite(s.reduction),"FX analog dynamics finite");}p.enabled=false;for(int j=0;j<2048;++j){float l=.2f,r=.3f;s.tick(l,r,p,sr,macros);if(j==2047)check(l==.2f&&r==.3f,"FX new bypass");}}
+ for(double sr:{44100.,48000.,96000.,192000.})for(int type=9;type<49;++type){cosmos::FxSlotState s;cosmos::FxParams p;p.enabled=true;p.type=type;p.a=.3f;p.b=.8f;p.autoGain=true;p.quality=2;std::array<float,8> macros{};for(int j=0;j<4096;++j){float l=.8f*std::sin(j*.3f),r=.7f*std::sin(j*.21f);s.tick(l,r,p,sr,macros);check(std::isfinite(l)&&std::isfinite(r)&&std::isfinite(s.reduction),"FX analog dynamics finite");}p.enabled=false;for(int j=0;j<2048;++j){float l=.2f,r=.3f;s.tick(l,r,p,sr,macros);if(j==2047)check(l==.2f&&r==.3f,"FX new bypass");}}
  cosmos::FxSlotState s;cosmos::FxParams p;p.enabled=true;p.type=14;p.a=.5f;std::array<float,8> macros{};float l=0,r=0;for(int j=0;j<1024;++j){l=.8f;r=-.6f;s.tick(l,r,p,48000,macros);}check(std::abs(l-.0316228f)<1e-5f&&s.reduction>20,"linked limiter ceiling");check(std::abs(r/l+.75f)<1e-4f,"limiter stereo link");
  }
  {
- for(double sr:{44100.,48000.,96000.,192000.})for(int type=29;type<cosmos::fxTypes;++type){cosmos::FxSlotState s;s.prepare();cosmos::FxParams p;p.enabled=true;p.type=type;p.a=.4f;p.b=.8f;p.sync=true;p.stereo=.75f;std::array<float,8> macros{};double diff=0;for(int j=0;j<20000;++j){float dry=.4f*std::sin(j*.07f),l=dry,r=.3f*std::sin(j*.13f);s.tick(l,r,p,sr,macros);check(std::isfinite(l)&&std::isfinite(r),"modulation finite");diff+=std::abs(l-dry);}check(diff>.01,"modulation changes signal");p.enabled=false;for(int j=0;j<2048;++j){float l=.2f,r=.3f;s.tick(l,r,p,sr,macros);if(j==2047)check(l==.2f&&r==.3f,"modulation bypass");}}
+ for(double sr:{44100.,48000.,96000.,192000.})for(int type=29;type<49;++type){cosmos::FxSlotState s;s.prepare();cosmos::FxParams p;p.enabled=true;p.type=type;p.a=.4f;p.b=.8f;p.sync=true;p.stereo=.75f;std::array<float,8> macros{};double diff=0;for(int j=0;j<20000;++j){float dry=.4f*std::sin(j*.07f),l=dry,r=.3f*std::sin(j*.13f);s.tick(l,r,p,sr,macros);check(std::isfinite(l)&&std::isfinite(r),"modulation finite");diff+=std::abs(l-dry);}check(diff>.01,"modulation changes signal");p.enabled=false;for(int j=0;j<2048;++j){float l=.2f,r=.3f;s.tick(l,r,p,sr,macros);if(j==2047)check(l==.2f&&r==.3f,"modulation bypass");}}
  check(std::abs(cosmos::modulationHz(.5f,true,120)-2.f)<1e-6f,"tempo modulation division");
+
+ check(std::abs(cosmos::delaySeconds(10.f/15,true,120)-.5f)<1e-6f,"quarter note echo");
+ check(std::abs(cosmos::delaySeconds(11.f/15,true,120)-2.f/3)<1e-6f,"triplet echo");
+ check(std::abs(cosmos::delaySeconds(12.f/15,true,120)-.75f)<1e-6f,"dotted echo");
+ for(double sr:{44100.,48000.,96000.,192000.}){
+  for(int type=49;type<cosmos::fxTypes;++type){
+   cosmos::FxSlotState s;s.prepare(sr);cosmos::FxParams p;p.enabled=true;p.type=type;p.a=.35f;p.b=1;p.delayFeedbackR=.72f;std::array<float,8> m{};
+   double tail=0;const int n=int(sr*.4);
+   for(int j=0;j<n;++j){float l=j<int(sr*.05)?(.7f*std::sin(j*.07f)):0,r=0;s.tick(l,r,p,sr,m);check(std::isfinite(l)&&std::isfinite(r)&&std::abs(l)<=4.01f&&std::abs(r)<=4.01f,"echo bounded");if(j>int(sr*.06))tail+=std::abs(l)+std::abs(r);}
+   check(tail>.001,"echo audible tail");p.delayFreeze=true;
+   for(int j=0;j<int(sr*.15);++j){float l=0,r=0;s.tick(l,r,p,sr,m);check(std::isfinite(l)&&std::isfinite(r),"freeze finite");}
+   p.enabled=false;for(int j=0;j<2048;++j){float l=.2f,r=.3f;s.tick(l,r,p,sr,m);if(j==2047)check(l==.2f&&r==.3f,"echo bypass");}
+  }
+ }
+ {cosmos::EchoState e;e.prepare(48000);cosmos::FxParams p;p.b=0;p.delayFeedbackR=0;p.delayTone=1;float early=0,arrival=0;for(int j=0;j<=240;++j){float x[2]={j==0?1.f:0.f,0};e.tick(x,49,0,0,p,48000);if(j<240)early+=std::abs(x[0]);else arrival=x[0];}check(early<1e-5f&&arrival>.99f,"digital echo impulse timing");}
+
  }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }

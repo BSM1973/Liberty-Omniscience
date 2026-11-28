@@ -135,7 +135,7 @@ class Engine {
     using MidiTable=std::array<std::array<float,128>,16>;
     std::vector<MidiTable> midiTables=std::vector<MidiTable>(2);
 public:
-    void prepare(double rate) noexcept {sr=std::max(8000.,rate);(void)waveBank();(void)hdBank();(void)factoryGrains();(void)hannLut();(void)sineLut();for(auto& rack:fxState)for(auto& slot:rack.slots)slot.prepare();reset();}
+    void prepare(double rate) noexcept {sr=std::max(8000.,rate);(void)waveBank();(void)hdBank();(void)factoryGrains();(void)hannLut();(void)sineLut();for(auto& rack:fxState)for(auto& slot:rack.slots)slot.prepare(sr);reset();}
     void reset() noexcept {for(auto& voice:v)voice.reset();pedal={};bend={};midiTables[0]={};channelPressure={};midiTables[1]={};counter=0;freeCycles={};nexusMotion={};nexusCC.fill(-1);for(auto& rack:fxState)for(auto& slot:rack.slots)slot.reset();}
     void noteOn(int ch,int note,float velocity) noexcept {
       if(ch<0||ch>=16)return;

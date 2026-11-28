@@ -6,8 +6,8 @@
 #include <numbers>
 #include <cstdint>
 namespace cosmos {
-constexpr int fxRacks=5,fxSlots=8,fxTypes=49;
-struct FxParams{int type=0;bool enabled=false;float mix=1,input=1,output=1,a=.5f,b=.5f;int macro=0;float depth=0;bool autoGain=false;int quality=0,cc=-1;float ccValue=-1;bool sync=false;float stereo=.5f;double bpm=120;};
+constexpr int fxRacks=5,fxSlots=8,fxTypes=64;
+struct FxParams{int type=0;bool enabled=false;float mix=1,input=1,output=1,a=.5f,b=.5f;int macro=0;float depth=0;bool autoGain=false;int quality=0,cc=-1;float ccValue=-1;bool sync=false;float stereo=.5f;double bpm=120;float delayFeedbackR=.5f,delayTone=.75f;bool delayFreeze=false;};
 struct FxRack{bool parallel=false;std::array<FxParams,fxSlots> slots{};};
 inline float analogShape(int type,float x,float a,float b)noexcept{
  float drive=1+15*a,z=x*drive;switch(type){
@@ -66,11 +66,108 @@ struct FxSpaceState{
   v[0]=out[0];v[1]=out[1];phase+=hz/float(sr);phase-=std::floor(phase);
  }
 };
+
+inline constexpr float delayLimitSeconds=2.f;
+inline float delaySeconds(float a,bool sync,double bpm) noexcept {
+ a=std::clamp(a,0.f,1.f);
+ if(!sync)return .005f*std::pow(400.f,a);
+ // Ordered by length: straight, dotted and triplet divisions.
+ constexpr float beats[]={1.f/12,1.f/8,1.f/6,3.f/16,1.f/4,1.f/3,3.f/8,.5f,2.f/3,.75f,1.f,4.f/3,1.5f,2.f,3.f,4.f};
+ return std::min(delayLimitSeconds,beats[std::clamp(int(a*15+.5f),0,15)]*float(60./std::clamp(bpm,20.,400.)));
+}
+struct EchoState {
+ std::array<std::vector<float>,2> ring;
+ std::array<float,2> lp{},hp{},bandLow{},bandHigh{},envelope{},smoothed{};
+ std::array<std::array<float,4>,2> diffusion{};
+ int write=0,valid=0,grainPos=0;float phase=0,freeze=0,activity=0;
+ void prepare(double sr=48000){const auto n=size_t(std::ceil(std::max(8000.,sr)*delayLimitSeconds))+8;for(auto& x:ring)x.resize(n);reset();}
+ void reset()noexcept{write=valid=grainPos=0;phase=freeze=activity=0;lp={};hp={};bandLow={};bandHigh={};envelope={};smoothed={};diffusion={};}
+ float read(int c,float d)const noexcept{
+  const int n=int(ring[c].size());if(n<4)return 0;
+  d=std::clamp(d,1.f,float(n-2));int i=int(d);float f=d-i;
+  float x=i<=valid?ring[c][(write-i+n)%n]:0,y=i+1<=valid?ring[c][(write-i-1+n)%n]:0;
+  return std::lerp(x,y,f);
+ }
+ static float bounded(float x)noexcept{return std::isfinite(x)?std::clamp(x,-4.f,4.f):0.f;}
+ float grains(int c,float base,int length,float slope)const noexcept{
+  const int p=grainPos%length,q=(p+length/2)%length;
+  auto tap=[&](int j){float w=.5f-.5f*std::cos(6.28318530718f*j/length);return w*read(c,base+slope*j);};
+  return tap(p)+tap(q);
+ }
+ void tick(float* v,int type,float a,float b,const FxParams& p,double sr)noexcept{
+  if(ring[0].empty())return;
+  const float rate=float(sr),seconds=delaySeconds(a,p.sync,p.bpm);
+  const float target=seconds*rate,omega=6.28318530718f/rate;
+  const float tone=std::clamp(p.delayTone,0.f,1.f);
+  const float cut=std::min(rate*.45f,300.f*std::exp2(tone*6.f));
+  const float fc=1-std::exp(-omega*cut),hc=1-std::exp(-omega*25.f);
+  const float fl=1-std::exp(-omega*400.f),fh=1-std::exp(-omega*2400.f);
+  const float slewing=std::min(1.f,100.f/rate);
+  float in[2]={bounded(v[0]),bounded(v[1])},wet[2]{},loop[2]{},frozen[2]{};
+  freeze+=std::clamp((p.delayFreeze?1.f:0.f)-freeze,-slewing,slewing);
+  for(int c=0;c<2;++c){
+   float desired=target*(type==53&&c==1?1.5f:type==52?1.f:1.f);
+   desired=std::clamp(desired,1.f,float(ring[c].size()-2));
+   if(smoothed[c]<=0)smoothed[c]=desired;
+   smoothed[c]+=slewing*(desired-smoothed[c]);
+   const float d=smoothed[c],osc=std::sin(6.28318530718f*(phase+c*.25f));
+   const int grain=std::max(16,int(std::min(d*.45f,rate*.045f))&~1);
+   frozen[c]=read(c,d);
+   float x=frozen[c];
+   switch(type){
+    case 49:break; // Digital
+    case 50:x=std::tanh(1.35f*x)/1.35f;break;
+    case 51:x=read(c,d+rate*.0015f*osc+rate*.0002f*std::sin(6.28318530718f*phase*7));x=std::tanh(1.5f*x)/1.5f;break;
+    case 52:break; // Ping-pong feedback cross routing below
+    case 53:break; // Dual stereo delay
+    case 54:x=.45f*x+.32f*read(c,d*.5f)+.23f*read(c,d*.75f);break;
+    case 55:x=grains(c,std::max(1.f,d-grain),grain,2.f);break;
+    case 56:envelope[c]+=std::min(1.f,(std::abs(in[c])>envelope[c]?180.f:8.f)/rate)*(std::abs(in[c])-envelope[c]);break;
+    case 57:{for(int j=0;j<4;++j){float y=diffusion[c][j]-.55f*x;diffusion[c][j]=x+.55f*y;x=y;}x=.55f*x+.25f*read(c,d*.83f)+.2f*read(1-c,d*.67f);break;}
+    case 58:x=grains(c,std::max(1.f,d-grain*.5f),grain,.5f);break;
+    case 59:x=.45f*x+.55f*grains(c,d+grain,grain,-1.f);break;
+    case 60:x=read(c,d+rate*.004f*osc);break;
+    case 61:{ // Frequency-dependent delays via a three-band complementary filter bank.
+      const float m=read(c,d*.65f),h=read(c,d*.37f);
+      bandLow[c]+=fl*(x-bandLow[c]);bandHigh[c]+=fh*(h-bandHigh[c]);
+      diffusion[c][0]+=fl*(m-diffusion[c][0]);diffusion[c][1]+=fh*(m-diffusion[c][1]);
+      x=bandLow[c]+diffusion[c][1]-diffusion[c][0]+h-bandHigh[c];break;}
+    case 62:break; // Tunable feedback filter, also on wet signal below
+    case 63:x=.55f*read(c,d+rate*.001f*osc)+.3f*read(c,d*.67f)+.15f*read(1-c,d*.43f);x=std::tanh(1.8f*x)/1.8f;break;
+    default:break;
+   }
+   x=bounded(x);
+   const float coef=type==50?std::min(fc,.12f):type==51||type==63?std::min(fc,.22f):fc;
+   lp[c]+=coef*(x-lp[c]);hp[c]+=hc*(lp[c]-hp[c]);
+   loop[c]=lp[c]-hp[c];
+   wet[c]=type==62?loop[c]:type==56?x/(1+8*envelope[c]):x;
+   wet[c]=std::lerp(wet[c],frozen[c],freeze);
+  }
+  float fb[2]={std::clamp(b,0.f,1.f)*.94f,std::clamp(p.delayFeedbackR,0.f,1.f)*.94f};
+  for(int c=0;c<2;++c){
+   int src=type==52?1-c:c;
+   // At full freeze, recirculate the unfiltered fixed delay with no new input.
+   ring[c][write]=bounded(std::lerp(in[c]+fb[c]*loop[src],frozen[c],freeze));
+   v[c]=bounded(wet[c]);
+  }
+  write=(write+1)%int(ring[0].size());valid=std::min(valid+1,int(ring[0].size())-1);
+  if(++grainPos>=1000000000)grainPos=0;
+  phase+=float((type==51||type==63?.35: .6)/sr);phase-=std::floor(phase);
+  activity=std::max(std::max(std::abs(v[0]),std::abs(v[1])),activity*.9995f);
+ }
+};
+inline std::array<float,4> echoPreset(int type,int profile)noexcept{
+ constexpr float settings[15][4]={{.58f,.32f,.32f,.9f},{.62f,.46f,.44f,.45f},{.67f,.52f,.48f,.58f},{.7f,.55f,.55f,.8f},{.65f,.43f,.55f,.82f},{.72f,.48f,.44f,.72f},{.64f,.37f,.42f,.85f},{.64f,.55f,.5f,.8f},{.66f,.56f,.52f,.65f},{.7f,.53f,.48f,.78f},{.68f,.55f,.55f,.7f},{.66f,.5f,.48f,.75f},{.71f,.45f,.48f,.9f},{.62f,.56f,.56f,.38f},{.72f,.57f,.51f,.55f}};
+ auto q=std::array<float,4>{};for(int j=0;j<4;++j)q[j]=settings[std::clamp(type-49,0,14)][j];
+ float d=profile==1?-.18f:profile==3?.18f:0.f;
+ q[0]=std::clamp(q[0]+d*.5f,0.f,1.f);for(int j=1;j<3;++j)q[j]=std::clamp(q[j]+d,0.f,.95f);return q;
+}
+
 struct FxSlotState{
- int type=0;float wet=0;std::array<float,2> low{},dc{},env{};float phase=0,reduction=0;std::array<float,2> low2{},previous{},fastEnv{},slowEnv{};std::array<float,3> bandEnv{};float linkedEnv=0;FxSpaceState space;
- void prepare(){space.prepare();clear();wet=0;type=0;}
+ int type=0;float wet=0;std::array<float,2> low{},dc{},env{};float phase=0,reduction=0;std::array<float,2> low2{},previous{},fastEnv{},slowEnv{};std::array<float,3> bandEnv{};float linkedEnv=0;FxSpaceState space;EchoState echo;
+ void prepare(double sr=48000){space.prepare();echo.prepare(sr);clear();wet=0;type=0;}
  void reset()noexcept{clear();wet=0;type=0;}
- void clear()noexcept{low={};dc={};env={};low2={};previous={};fastEnv={};slowEnv={};bandEnv={};linkedEnv=0;phase=0;reduction=0;space.reset();}
+ void clear()noexcept{low={};dc={};env={};low2={};previous={};fastEnv={};slowEnv={};bandEnv={};linkedEnv=0;phase=0;reduction=0;space.reset();echo.reset();}
  bool active(const FxParams& p)const noexcept{return (p.enabled&&p.type>0)||wet>0;}
  void tick(float& l,float& r,const FxParams& p,double sr,const std::array<float,8>& macros)noexcept{
   if(!active(p)){reduction=0;return;}const int desired=p.enabled?std::clamp(p.type,0,fxTypes-1):0;
@@ -99,6 +196,7 @@ struct FxSlotState{
     }
     reduction=std::max(0.f,-20*std::log10(std::max(gain,1e-6f)));if(p.autoGain&&type>=9&&type<=13){float makeup=std::min(4.f,std::pow(1/std::max(threshold,.001f),(1-1/ratio)*.25f));for(auto& x:v)x*=makeup;}
   }
+  else if(type>=49){echo.tick(v,type,a,b,p,sr);space.phase=echo.phase;}
   else if(type>=29){space.tick(v,type,a,b,p.stereo,p.sync,p.bpm,sr);}
   else if(type>=19){for(int c=0;c<2;++c){float x=v[c],out=0;int n=p.quality==2?4:p.quality==1?2:1;for(int j=1;j<=n;++j)out+=analogShape(type,std::lerp(previous[c],x,float(j)/n),a,b);previous[c]=x;v[c]=out/n;if(p.autoGain)v[c]/=std::sqrt(1+15*a);}}
   else for(int c=0;c<2;++c){float x=v[c];switch(type){

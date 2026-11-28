@@ -179,3 +179,8 @@ Both platforms failed the existing sizeof(Engine) < 4096 assertion after inline 
 
 ## v0.7.2 COSMOS MODULATION & SPACE COLLECTION
 20 new effects IDs29–48, modulated interpolated delay lines, all-pass phasers, amplitude/pan, approximate quadrature frequency shift, stereo shaping and state-variable bandpass effects. Preallocated 2x16384 floats per slot (~5 MiB for 40 slots), reset in place with valid-history counter, no per-render allocation. Free or BPM-synced phase increments for applicable modulation types (not transport phase lock); adjustable stereo phase offset; live phase display, schema24. Through-zero uses internally delayed reference, host latency compensation and full dry alignment not implemented. Rotary/Doppler/Uni-Vibe and frequency shift are simplified models, no hardware match or spectral rejection claim. Prior oversampling not upgraded, matrix FX destinations and effect-specific presets remain open. Tests four rates, finite, nonidentity, bypass, tempo division; existing 370/270/54 gates retained. Build pending.
+
+
+## v0.7.3 — COSMOS DELAY & ECHO COLLECTION
+
+15 additional native delay algorithms, indices 49–63; independent right feedback, feedback low-pass and fixed DC/high-pass protection, tempo divisions, freeze, three per-effect profiles. Preallocate stereo delay buffers for up to 2 seconds per slot at host sample rate. Spectral Delay uses a complementary three-band frequency-dependent delay rather than FFT bins. Repetition graphic is a parameter-based decay preview, not a measured waveform. Automated finite, bypass, tail, impulse and tempo tests; native UI and subjective audio checks remain separate release gates.
