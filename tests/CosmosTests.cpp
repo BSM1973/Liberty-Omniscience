@@ -465,5 +465,9 @@ int main(){
  for(double sr:{44100.,48000.,96000.,192000.})for(int type=9;type<cosmos::fxTypes;++type){cosmos::FxSlotState s;cosmos::FxParams p;p.enabled=true;p.type=type;p.a=.3f;p.b=.8f;p.autoGain=true;p.quality=2;std::array<float,8> macros{};for(int j=0;j<4096;++j){float l=.8f*std::sin(j*.3f),r=.7f*std::sin(j*.21f);s.tick(l,r,p,sr,macros);check(std::isfinite(l)&&std::isfinite(r)&&std::isfinite(s.reduction),"FX analog dynamics finite");}p.enabled=false;for(int j=0;j<2048;++j){float l=.2f,r=.3f;s.tick(l,r,p,sr,macros);if(j==2047)check(l==.2f&&r==.3f,"FX new bypass");}}
  cosmos::FxSlotState s;cosmos::FxParams p;p.enabled=true;p.type=14;p.a=.5f;std::array<float,8> macros{};float l=0,r=0;for(int j=0;j<1024;++j){l=.8f;r=-.6f;s.tick(l,r,p,48000,macros);}check(std::abs(l-.0316228f)<1e-5f&&s.reduction>20,"linked limiter ceiling");check(std::abs(r/l+.75f)<1e-4f,"limiter stereo link");
  }
+ {
+ for(double sr:{44100.,48000.,96000.,192000.})for(int type=29;type<cosmos::fxTypes;++type){cosmos::FxSlotState s;s.prepare();cosmos::FxParams p;p.enabled=true;p.type=type;p.a=.4f;p.b=.8f;p.sync=true;p.stereo=.75f;std::array<float,8> macros{};double diff=0;for(int j=0;j<20000;++j){float dry=.4f*std::sin(j*.07f),l=dry,r=.3f*std::sin(j*.13f);s.tick(l,r,p,sr,macros);check(std::isfinite(l)&&std::isfinite(r),"modulation finite");diff+=std::abs(l-dry);}check(diff>.01,"modulation changes signal");p.enabled=false;for(int j=0;j<2048;++j){float l=.2f,r=.3f;s.tick(l,r,p,sr,macros);if(j==2047)check(l==.2f&&r==.3f,"modulation bypass");}}
+ check(std::abs(cosmos::modulationHz(.5f,true,120)-2.f)<1e-6f,"tempo modulation division");
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }
