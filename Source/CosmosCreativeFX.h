@@ -66,7 +66,7 @@ struct CreativeFFT {
     case 79:if(c.captured){c.heldPhase[k]=wrap(c.heldPhase[k]+c.advance[k]);z=std::lerp(0.f,1.f,freeze?1.f:a)*std::polar(c.held[k],c.heldPhase[k])+(1-(freeze?1.f:a))*z;}break;
     case 80:{int radius=1+int(a*12);float sum=0,weight=0;for(int j=std::max(0,k-radius);j<=std::min(bins-1,k+radius);++j){float w=float(radius+1-std::abs(j-k));sum+=mag[j]*w;weight+=w;}m=std::lerp(m,sum/weight,b);z=std::polar(m,ph);break;}
     case 81:if(c.captured){m=std::lerp(m,c.held[k],a);z=std::polar(m,ph);}break;
-    case 82:{int shift=int(std::round((2*a-1)*32));int src=k-shift;z=src>=0&&src<bins?c.original[src]*std::polar(1.f,tau*shift*float(clock%4)*hop/n):C{};z=(1-b)*c.original[k]+b*z;break;}
+    case 82:{int shift=int(std::round((2*a-1)*32));int src=k-shift;z=src>=0&&src<bins?c.original[src]*std::polar(1.f,tau*shift*float((clock/hop)%4)*hop/n):C{};z=(1-b)*c.original[k]+b*z;break;}
     case 83:{float threshold=.02f*std::pow(1000.f,a);float g=m>=threshold?1.f:std::pow(m/std::max(threshold,1e-8f),1+7*b);z*=g;break;}
     case 84:{float threshold=.1f*std::pow(100.f,a);if(m>threshold)z*=std::pow(threshold/m,1-1/(1+15*b));break;}
     case 88:{float ratio=std::exp2(2*a-1);float target=magnitudeAt(c.envelope,k/ratio);float gain=std::clamp(target/std::max(.02f,c.envelope[k]),.1f,5.f);z*=std::lerp(1.f,gain,b);break;}

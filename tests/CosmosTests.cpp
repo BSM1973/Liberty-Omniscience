@@ -516,6 +516,9 @@ int main(){
  double error=0,energy=0;
  for(int j=0;j<4096;++j){float in=.3f*std::sin(j*.123f);float v[2]={in,in};fft.tick(v,80,.5f,0,false,48000);if(j>=1536){float expected=.3f*std::sin((j-512)*.123f);error+=std::abs(v[0]-expected);energy+=std::abs(expected);}}
  check(error/std::max(energy,1e-9)<1e-4,"WOLA reconstruction with 512 sample latency");
+ fft.reset();double shiftedSin=0,shiftedCos=0,originalSin=0,originalCos=0;
+ for(int j=0;j<8192;++j){float v[2]={.3f*std::sin(cosmos::CreativeFFT::tau*16*j/512),0};fft.tick(v,82,.5f+1.f/64.f,1,false,48000);if(j>=4096){double p=cosmos::CreativeFFT::tau*j/512;shiftedSin+=v[0]*std::sin(17*p);shiftedCos+=v[0]*std::cos(17*p);originalSin+=v[0]*std::sin(16*p);originalCos+=v[0]*std::cos(16*p);}}
+ check(std::hypot(shiftedSin,shiftedCos)>400&&std::hypot(originalSin,originalCos)<10,"spectral shift one FFT bin");
  for(double sr:{44100.,48000.,96000.,192000.})for(int type=79;type<cosmos::fxTypes;++type){
   cosmos::FxSlotState s;s.prepare(sr);cosmos::FxParams p;p.enabled=true;p.type=type;p.a=.72f;p.b=.76f;p.sync=true;
   std::array<float,8> m{};double total=0,diff=0;
