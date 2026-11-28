@@ -184,3 +184,8 @@ Both platforms failed the existing sizeof(Engine) < 4096 assertion after inline 
 ## v0.7.3 — COSMOS DELAY & ECHO COLLECTION
 
 15 additional native delay algorithms, indices 49–63; independent right feedback, feedback low-pass and fixed DC/high-pass protection, tempo divisions, freeze, three per-effect profiles. Preallocate stereo delay buffers for up to 2 seconds per slot at host sample rate. Spectral Delay uses a complementary three-band frequency-dependent delay rather than FFT bins. Repetition graphic is a parameter-based decay preview, not a measured waveform. Automated finite, bypass, tail, impulse and tempo tests; native UI and subjective audio checks remain separate release gates.
+
+
+## v0.7.4 — COSMOS REVERB COLLECTION
+
+Append 15 modes (64–78) to preserve old effect indices. Shared eight-line orthogonal feedback delay network with mode-specific geometry, damping, decay and modulation; distinct early reflections, reverse and granular input, gated tail, octave shimmer, spring approximation and infinite tail. Existing extended FX controls are reused contextually: A decay, B diffusion, stereo modulation, right feedback parameter early reflections, tone damping, freeze. Three profiles per mode. Preallocation outside the audio callback; bounded feedback; tests at four sample rates for tail, finite output, freeze, bypass, distinct mode signatures and orthogonal matrix energy. Spring and plate are algorithmic approximations, not physical or convolution models. Decay graphic is a parameter preview plus actual tail level. Subjective listening, CPU profiling and screenshot QA remain release gates.

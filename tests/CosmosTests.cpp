@@ -473,7 +473,7 @@ int main(){
  check(std::abs(cosmos::delaySeconds(11.f/15,true,120)-2.f/3)<1e-6f,"triplet echo");
  check(std::abs(cosmos::delaySeconds(12.f/15,true,120)-.75f)<1e-6f,"dotted echo");
  for(double sr:{44100.,48000.,96000.,192000.}){
-  for(int type=49;type<cosmos::fxTypes;++type){
+  for(int type=49;type<64;++type){
    cosmos::FxSlotState s;s.prepare(sr);cosmos::FxParams p;p.enabled=true;p.type=type;p.a=.35f;p.b=1;p.delayFeedbackR=.72f;std::array<float,8> m{};
    double tail=0;const int n=int(sr*.4);
    for(int j=0;j<n;++j){float l=j<int(sr*.05)?(.7f*std::sin(j*.07f)):0,r=0;s.tick(l,r,p,sr,m);check(std::isfinite(l)&&std::isfinite(r)&&std::abs(l)<=4.01f&&std::abs(r)<=4.01f,"echo bounded");if(j>int(sr*.06))tail+=std::abs(l)+std::abs(r);}
@@ -484,6 +484,27 @@ int main(){
  }
  {cosmos::EchoState e;e.prepare(48000);cosmos::FxParams p;p.b=0;p.delayFeedbackR=0;p.delayTone=1;float early=0,arrival=0;for(int j=0;j<=240;++j){float x[2]={j==0?1.f:0.f,0};e.tick(x,49,0,0,p,48000);if(j<240)early+=std::abs(x[0]);else arrival=x[0];}check(early<1e-5f&&arrival>.99f,"digital echo impulse timing");}
 
+ }
+
+ {
+ static_assert(cosmos::fxTypes==79);
+ std::array<double,15> signatures{};
+ for(double sr:{44100.,48000.,96000.,192000.}){
+  for(int type=64;type<cosmos::fxTypes;++type){
+   cosmos::FxSlotState s;s.prepare(sr);cosmos::FxParams p;p.type=type;p.enabled=true;p.a=.6f;p.b=.75f;p.stereo=.6f;p.delayFeedbackR=.65f;p.delayTone=.7f;
+   std::array<float,8> m{};double tail=0,weighted=0;
+   for(int j=0;j<int(sr*.65);++j){
+    float l=j<int(sr*.025)? .45f*std::sin(j*.09f):0,r=j<int(sr*.025)? .3f*std::cos(j*.071f):0;
+    s.tick(l,r,p,sr,m);check(std::isfinite(l)&&std::isfinite(r)&&std::abs(l)<=4.01f&&std::abs(r)<=4.01f,"reverb bounded");
+    if(j>int(sr*.04)){tail+=double(l)*l+double(r)*r;weighted+=(std::abs(l)+std::abs(r))*(1.+double(j)/sr);}
+   }
+   check(tail>1e-7,"reverb produces tail");if(sr==48000)signatures[type-64]=weighted;
+   p.delayFreeze=true;for(int j=0;j<int(sr*.2);++j){float l=0,r=0;s.tick(l,r,p,sr,m);check(std::isfinite(l)&&std::isfinite(r),"reverb freeze finite");}
+   p.enabled=false;for(int j=0;j<2048;++j){float l=.2f,r=.3f;s.tick(l,r,p,sr,m);if(j==2047)check(l==.2f&&r==.3f,"reverb bypass");}
+  }
+ }
+ for(int i=0;i<15;++i)for(int j=i+1;j<15;++j)check(std::abs(signatures[i]-signatures[j])>1e-7,"reverb modes have distinct signatures");
+ {std::array<float,8> x={1,2,3,4,5,6,7,8};double before=0,after=0;for(float v:x)before+=v*v;cosmos::ReverbState::hadamard(x);for(float v:x)after+=v*v;check(std::abs(before-after)<1e-4,"orthogonal reverb matrix energy");}
  }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }

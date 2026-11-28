@@ -6,7 +6,7 @@
 #include <numbers>
 #include <cstdint>
 namespace cosmos {
-constexpr int fxRacks=5,fxSlots=8,fxTypes=64;
+constexpr int fxRacks=5,fxSlots=8,fxTypes=79;
 struct FxParams{int type=0;bool enabled=false;float mix=1,input=1,output=1,a=.5f,b=.5f;int macro=0;float depth=0;bool autoGain=false;int quality=0,cc=-1;float ccValue=-1;bool sync=false;float stereo=.5f;double bpm=120;float delayFeedbackR=.5f,delayTone=.75f;bool delayFreeze=false;};
 struct FxRack{bool parallel=false;std::array<FxParams,fxSlots> slots{};};
 inline float analogShape(int type,float x,float a,float b)noexcept{
@@ -163,11 +163,139 @@ inline std::array<float,4> echoPreset(int type,int profile)noexcept{
  q[0]=std::clamp(q[0]+d*.5f,0.f,1.f);for(int j=1;j<3;++j)q[j]=std::clamp(q[j]+d,0.f,.95f);return q;
 }
 
+
+struct ReverbProfile{float size,decay,mod,early,colour;};
+inline constexpr ReverbProfile reverbProfiles[15]={
+ {.40f,.65f,.15f,.75f,.65f}, // Room
+ {.55f,.85f,.10f,.85f,.80f}, // Studio
+ {.75f,1.10f,.20f,.65f,.68f}, // Chamber
+ {1.15f,1.65f,.30f,.45f,.70f}, // Hall
+ {1.40f,2.05f,.35f,.40f,.78f}, // Concert
+ {1.80f,2.60f,.40f,.30f,.58f}, // Cathedral
+ {.85f,1.35f,.45f,.22f,.90f}, // Plate
+ {.65f,.90f,.18f,.60f,.85f}, // Spring
+ {1.55f,2.40f,.65f,.22f,.48f}, // Ambient
+ {1.35f,2.20f,.45f,.25f,.82f}, // Shimmer
+ {1.05f,1.40f,.25f,.70f,.75f}, // Reverse
+ {.80f,1.10f,.25f,.45f,.82f}, // Gated
+ {1.20f,1.70f,1.f,.35f,.75f}, // Modulated
+ {1.30f,1.95f,.65f,.30f,.70f}, // Granular
+ {1.65f,3.50f,.30f,.25f,.65f} // Infinite
+};
+inline std::array<float,5> reverbPreset(int type,int profile)noexcept{
+ auto r=reverbProfiles[std::clamp(type-64,0,14)];
+ float d=profile==1?-.16f:profile==3?.16f:0.f;
+ return {std::clamp(.44f+d,0.f,1.f),std::clamp(.72f+d*.5f,0.f,1.f),std::clamp(r.early-d,0.f,1.f),r.colour,std::clamp(r.mod*.65f+d,0.f,1.f)};
+}
+struct ReverbState{
+ static constexpr int lines=8;
+ std::array<std::vector<float>,lines> tank;
+ std::array<std::vector<float>,2> early,pitch;
+ std::array<float,lines> damp{},scatter{},length{};
+ int write=0,valid=0,earlyWrite=0,earlyValid=0,pitchWrite=0,pitchValid=0,grainPos=0;
+ float phase=0,freeze=0,gate=0,gateHold=0,activity=0,shimmerPhase=0;
+ void prepare(double sr=48000){
+  const auto n=size_t(std::ceil(std::max(8000.,sr)*.24))+8;
+  for(auto& x:tank)x.resize(n);
+  for(auto& x:early)x.resize(n);
+  for(auto& x:pitch)x.resize(size_t(std::ceil(std::max(8000.,sr)*.065))+8);
+  reset();
+ }
+ void reset()noexcept{write=valid=earlyWrite=earlyValid=pitchWrite=pitchValid=grainPos=0;phase=freeze=gate=gateHold=activity=shimmerPhase=0;damp={};scatter={};length={};}
+ static float read(const std::vector<float>& buf,int w,int v,float samples)noexcept{
+  const int n=int(buf.size());if(n<4)return 0;
+  samples=std::clamp(samples,1.f,float(n-2));const int k=int(samples);const float f=samples-k;
+  const float a=k<=v?buf[(w-k+n)%n]:0,b=k+1<=v?buf[(w-k-1+n)%n]:0;
+  return std::lerp(a,b,f);
+ }
+ static void advance(int& w,int& v,int n)noexcept{if(++w==n)w=0;v=std::min(v+1,n-1);}
+ static float safe(float x)noexcept{return std::isfinite(x)?std::clamp(x,-4.f,4.f):0.f;}
+ static void hadamard(std::array<float,lines>& x)noexcept{
+  for(int span=1;span<lines;span*=2)for(int i=0;i<lines;i+=2*span)for(int j=0;j<span;++j){const float a=x[i+j],b=x[i+j+span];x[i+j]=a+b;x[i+j+span]=a-b;}
+  for(auto& v:x)v*=.3535533905932738f;
+ }
+ float grain(int c,float base,int span,float slope)const noexcept{
+  const int p=grainPos%span,q=(p+span/2)%span;
+  auto tap=[&](int j){return (.5f-.5f*std::cos(6.28318530718f*j/span))*read(early[c],earlyWrite,earlyValid,base+slope*j);};
+  return tap(p)+tap(q);
+ }
+ float octave(int c,float sr)const noexcept{
+  const float span=std::max(16.f,sr*.045f);
+  auto tap=[&](float ph){return (.5f-.5f*std::cos(6.28318530718f*ph))*read(pitch[c],pitchWrite,pitchValid,2+span*(1-ph));};
+  float q=shimmerPhase+.5f;if(q>=1)q-=1;return tap(shimmerPhase)+tap(q);
+ }
+ void tick(float* v,int type,float a,float b,const FxParams& p,double sr)noexcept{
+  if(tank[0].empty())return;
+  constexpr float tau=6.28318530718f;
+  constexpr float ms[lines]={29.7f,37.1f,41.9f,53.3f,61.7f,71.9f,79.3f,89.9f};
+  constexpr float signsL[lines]={1,-1,1,1,-1,1,-1,-1},signsR[lines]={1,1,-1,1,1,-1,-1,-1};
+  constexpr float erMs[6]={3.3f,7.1f,11.7f,17.9f,23.3f,31.1f};
+  constexpr float erGain[6]={.29f,.22f,.17f,.13f,.10f,.07f};
+  const auto prof=reverbProfiles[std::clamp(type-64,0,14)];
+  const float rate=float(sr),smooth=std::min(1.f,80.f/rate),diff=std::clamp(b,0.f,1.f);
+  const float mod=std::clamp(p.stereo,0.f,1.f)*prof.mod;
+  const float er=std::clamp(p.delayFeedbackR,0.f,1.f);
+  const float tone=std::clamp(p.delayTone,0.f,1.f);
+  const float rt60=std::clamp(.25f*std::exp2(5*a)*prof.decay,.12f,24.f);
+  const float fc=1-std::exp(-tau*std::min(rate*.44f,550.f*std::exp2(5*tone))/rate);
+  freeze+=std::clamp((p.delayFreeze?1.f:0.f)-freeze,-smooth,smooth);
+  const float in[2]={safe(v[0]),safe(v[1])};
+  const float peak=std::max(std::abs(in[0]),std::abs(in[1]));
+  if(peak>.015f)gateHold=.12f+.65f*a;
+  gateHold=std::max(0.f,gateHold-1/rate);
+  gate+=std::min(1.f,(gateHold>0?300.f:45.f)/rate)*((gateHold>0?1.f:0.f)-gate);
+  float erOut[2]{},excite[2]{};
+  for(int c=0;c<2;++c){
+   for(int j=0;j<6;++j)erOut[c]+=erGain[j]*read(early[(j%3==0)?1-c:c],earlyWrite,earlyValid,rate*.001f*erMs[j]*prof.size*(c?1.09f:1.f));
+   excite[c]=.72f*in[c]+.28f*erOut[c];
+   if(type==74){int span=std::max(16,int(rate*.075f)&~1);excite[c]=grain(c,2.f,span,2.f);}
+   if(type==77){int span=std::max(16,int(rate*.038f)&~1);excite[c]=.55f*excite[c]+.45f*grain(c,rate*.013f,span,.65f);}
+   if(type==73)excite[c]+=.16f*octave(c,rate)*(1-freeze);
+   if(type==71){float x=excite[c];float z=read(early[c],earlyWrite,earlyValid,rate*.0027f);excite[c]=.65f*x+.35f*(z-read(early[c],earlyWrite,earlyValid,rate*.0061f));}
+  }
+  std::array<float,lines> taps{},feedback{};
+  float out[2]{};
+  for(int j=0;j<lines;++j){
+   float base=rate*.001f*ms[j]*prof.size;
+   if(length[j]<=0)length[j]=base;length[j]+=smooth*(base-length[j]);
+   float wobble=rate*.001f*(type==76?5.f:1.8f)*mod*std::sin(tau*(phase+j*.137f))*(1-freeze);
+   if(type==71)wobble+=rate*.00035f*std::sin(tau*(phase*5+j*.23f))*(1-freeze);
+   taps[j]=read(tank[j],write,valid,length[j]+wobble);
+   damp[j]+=fc*(taps[j]-damp[j]);
+   float x=std::lerp(damp[j],taps[j],freeze);
+   const float k=.15f+.60f*diff;
+   const float y=scatter[j]-k*x;scatter[j]=x+k*y;
+   feedback[j]=std::lerp(std::lerp(x,y,diff*.72f),x,freeze);
+   out[0]+=signsL[j]*taps[j]*.35355339f;out[1]+=signsR[j]*taps[j]*.35355339f;
+  }
+  hadamard(feedback);
+  for(int j=0;j<lines;++j){
+   float gain=std::pow(10.f,-3.f*(length[j]/rate)/rt60);
+   if(type==78)gain=std::max(gain,.992f);
+   gain=std::lerp(std::min(gain,.9993f),1.f,freeze);
+   const float input=(signsL[j]*excite[0]+signsR[j]*excite[1])*.20f*(1-freeze);
+   tank[j][write]=safe(input+gain*feedback[j]);
+  }
+  for(int c=0;c<2;++c){
+   early[c][earlyWrite]=in[c]*(1-freeze);
+   pitch[c][pitchWrite]=type==73?safe(out[c]):0.f;
+   float tail=out[c]*.64f;
+   if(type==75)tail*=std::lerp(gate,1.f,freeze);
+   v[c]=safe(tail+er*prof.early*erOut[c]*(1-freeze));
+  }
+  advance(write,valid,int(tank[0].size()));advance(earlyWrite,earlyValid,int(early[0].size()));advance(pitchWrite,pitchValid,int(pitch[0].size()));
+  if(++grainPos>=1000000000)grainPos=0;
+  phase+=(type==76?.82f:.29f)/rate;phase-=std::floor(phase);
+  shimmerPhase+=1/std::max(16.f,rate*.045f);shimmerPhase-=std::floor(shimmerPhase);
+  activity=std::max(std::max(std::abs(v[0]),std::abs(v[1])),activity*.9995f);
+ }
+};
+
 struct FxSlotState{
- int type=0;float wet=0;std::array<float,2> low{},dc{},env{};float phase=0,reduction=0;std::array<float,2> low2{},previous{},fastEnv{},slowEnv{};std::array<float,3> bandEnv{};float linkedEnv=0;FxSpaceState space;EchoState echo;
- void prepare(double sr=48000){space.prepare();echo.prepare(sr);clear();wet=0;type=0;}
+ int type=0;float wet=0;std::array<float,2> low{},dc{},env{};float phase=0,reduction=0;std::array<float,2> low2{},previous{},fastEnv{},slowEnv{};std::array<float,3> bandEnv{};float linkedEnv=0;FxSpaceState space;EchoState echo;ReverbState reverb;
+ void prepare(double sr=48000){space.prepare();echo.prepare(sr);reverb.prepare(sr);clear();wet=0;type=0;}
  void reset()noexcept{clear();wet=0;type=0;}
- void clear()noexcept{low={};dc={};env={};low2={};previous={};fastEnv={};slowEnv={};bandEnv={};linkedEnv=0;phase=0;reduction=0;space.reset();echo.reset();}
+ void clear()noexcept{low={};dc={};env={};low2={};previous={};fastEnv={};slowEnv={};bandEnv={};linkedEnv=0;phase=0;reduction=0;space.reset();echo.reset();reverb.reset();}
  bool active(const FxParams& p)const noexcept{return (p.enabled&&p.type>0)||wet>0;}
  void tick(float& l,float& r,const FxParams& p,double sr,const std::array<float,8>& macros)noexcept{
   if(!active(p)){reduction=0;return;}const int desired=p.enabled?std::clamp(p.type,0,fxTypes-1):0;
@@ -196,6 +324,7 @@ struct FxSlotState{
     }
     reduction=std::max(0.f,-20*std::log10(std::max(gain,1e-6f)));if(p.autoGain&&type>=9&&type<=13){float makeup=std::min(4.f,std::pow(1/std::max(threshold,.001f),(1-1/ratio)*.25f));for(auto& x:v)x*=makeup;}
   }
+  else if(type>=64){reverb.tick(v,type,a,b,p,sr);space.phase=reverb.activity;}
   else if(type>=49){echo.tick(v,type,a,b,p,sr);space.phase=echo.phase;}
   else if(type>=29){space.tick(v,type,a,b,p.stereo,p.sync,p.bpm,sr);}
   else if(type>=19){for(int c=0;c<2;++c){float x=v[c],out=0;int n=p.quality==2?4:p.quality==1?2:1;for(int j=1;j<=n;++j)out+=analogShape(type,std::lerp(previous[c],x,float(j)/n),a,b);previous[c]=x;v[c]=out/n;if(p.autoGain)v[c]/=std::sqrt(1+15*a);}}
