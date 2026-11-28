@@ -126,7 +126,7 @@ class Engine {
     std::uint64_t counter=0;
     std::array<double,lfoCount> freeCycles{};
     // Allocate the 40 FX states once with the engine, not on the audio thread or engine stack.
-    std::vector<FxRackState> fxState = std::vector<FxRackState>(fxRacks);
+    std::vector<FxRackState> fxState = std::vector<FxRackState>(fxRacks);std::array<FxAlignment,layers> fxLayerAlign;
     NexusMotion nexusMotion;std::array<float,128> nexusCC{};
     // Allocate the fixed voice pool once, outside the audio callback.
     std::vector<Voice> v = std::vector<Voice>(voices);
@@ -135,8 +135,8 @@ class Engine {
     using MidiTable=std::array<std::array<float,128>,16>;
     std::vector<MidiTable> midiTables=std::vector<MidiTable>(2);
 public:
-    void prepare(double rate) noexcept {sr=std::max(8000.,rate);(void)waveBank();(void)hdBank();(void)factoryGrains();(void)hannLut();(void)sineLut();for(auto& rack:fxState)for(auto& slot:rack.slots)slot.prepare(sr);reset();}
-    void reset() noexcept {for(auto& voice:v)voice.reset();pedal={};bend={};midiTables[0]={};channelPressure={};midiTables[1]={};counter=0;freeCycles={};nexusMotion={};nexusCC.fill(-1);for(auto& rack:fxState)for(auto& slot:rack.slots)slot.reset();}
+    void prepare(double rate) noexcept {sr=std::max(8000.,rate);(void)waveBank();(void)hdBank();(void)factoryGrains();(void)hannLut();(void)sineLut();for(auto& rack:fxState)for(auto& slot:rack.slots)slot.prepare(sr);for(auto& a:fxLayerAlign)a.prepare(fxSlots*4096);reset();}
+    void reset() noexcept {for(auto& voice:v)voice.reset();pedal={};bend={};midiTables[0]={};channelPressure={};midiTables[1]={};counter=0;freeCycles={};nexusMotion={};nexusCC.fill(-1);for(auto& rack:fxState)for(auto& slot:rack.slots)slot.reset();for(auto& a:fxLayerAlign)a.reset();}
     void noteOn(int ch,int note,float velocity) noexcept {
       if(ch<0||ch>=16)return;
       if(velocity<=0){noteOff(ch,note);return;}
@@ -172,6 +172,7 @@ public:
     }
     std::array<float,matrixCount> matrixValues()const noexcept{for(const auto& a:v)if(a.active)return a.routeView;return {};}
     std::array<float,lfoCount> lfoPhases()const noexcept{for(const auto& a:v)if(a.active)return a.lfoPhaseView;std::array<float,lfoCount> result;result.fill(-1);return result;}
+    static int latency(const Patch& p)noexcept{int n=0;for(int k=0;k<layers;++k)n=std::max(n,rackLatency(p.fx[k]));return n+rackLatency(p.fx[4]);}
     float fxPhase(int rack,int slot)const noexcept{return fxState[rack].slots[slot].space.phase;}
     float fxReduction(int rack,int slot)const noexcept{return fxState[rack].slots[slot].reduction;}
     bool voiceActive(int index)const noexcept{return index>=0&&index<voices&&v[size_t(index)].active;}
@@ -180,11 +181,12 @@ public:
     void renderSynth(float* left,float* right,int n,const Patch& patch,float* const* buses=nullptr) noexcept {if(n<=0)return;if(patch.morph.enabled&&patch.morph.amount>0){auto transformed=patch;auto target=nexusTarget(patch.nexus,patch.macros,nexusCC);auto motion=nexusMotion;float step=patch.nexus.smooth<=0?1.f:float(1-std::exp(-1000./(sr*patch.nexus.smooth)));motion.tick(target[0],target[1],patch.nexus.enabled?1.f:0.f,step);applyMorph(transformed,motion.x,motion.y);renderRange(left,right,n,transformed,0,voices,buses);}else renderRange(left,right,n,patch,0,voices,buses);auto target=nexusTarget(patch.nexus,patch.macros,nexusCC);float step=patch.nexus.smooth<=0?1.f:float(1-std::exp(-1000./(sr*patch.nexus.smooth)));for(int j=0;j<n;++j)nexusMotion.tick(target[0],target[1],patch.nexus.enabled?1.f:0.f,step);for(int i=0;i<lfoCount;++i)if(patch.lfo[i].mode!=0){freeCycles[i]+=n*lfoHz(patch.lfo[i],patch.bpm)/sr;if(freeCycles[i]>=4294967296.)freeCycles[i]-=4294967296.;}}
     void render(float* left,float* right,int n,const Patch& patch)noexcept{
       if(n<=0)return;bool layerFX=false;for(int k=0;k<layers;++k)layerFX|=fxState[k].active(patch.fx[k]);
-      if(!layerFX){if(!fxState[4].active(patch.fx[4])){renderSynth(left,right,n,patch);return;}}
+      if(!layerFX){for(auto& a:fxLayerAlign)a.reset();if(!fxState[4].active(patch.fx[4])){renderSynth(left,right,n,patch);return;}}
+      std::array<int,layers> rackDelays{};int layerLatency=0;for(int k=0;k<layers;++k){rackDelays[k]=rackLatency(patch.fx[k]);layerLatency=std::max(layerLatency,rackDelays[k]);}
       constexpr int capacity=1024;std::array<std::array<float,capacity>,8> buffer;
       std::array<float,capacity> mixL,mixR;std::array<float*,8> ptr;for(int j=0;j<8;++j)ptr[j]=buffer[j].data();
       for(int offset=0;offset<n;offset+=capacity){int count=std::min(capacity,n-offset);std::fill_n(mixL.data(),count,0.f);std::fill_n(mixR.data(),count,0.f);auto p=patch;if(p.transportValid)p.ppq+=offset*p.bpm/(60*sr);
-        if(layerFX){for(auto& x:buffer)std::fill_n(x.data(),count,0.f);renderSynth(mixL.data(),mixR.data(),count,p,ptr.data());for(int i=0;i<count;++i){float l=0,r=0;for(int k=0;k<layers;++k){float a=buffer[k*2][i],b=buffer[k*2+1][i];fxState[k].tick(a,b,p.fx[k],sr,p.macros);l+=a;r+=b;}mixL[i]=l;mixR[i]=r;}}
+        if(layerFX){for(auto& x:buffer)std::fill_n(x.data(),count,0.f);renderSynth(mixL.data(),mixR.data(),count,p,ptr.data());for(int i=0;i<count;++i){float l=0,r=0;for(int k=0;k<layers;++k){float a=buffer[k*2][i],b=buffer[k*2+1][i];fxState[k].tick(a,b,p.fx[k],sr,p.macros);fxLayerAlign[k].tick(a,b,layerLatency-rackDelays[k]);l+=a;r+=b;}mixL[i]=l;mixR[i]=r;}}
         else renderSynth(mixL.data(),mixR.data(),count,p);
         for(int i=0;i<count;++i){fxState[4].tick(mixL[i],mixR[i],p.fx[4],sr,p.macros);left[offset+i]+=mixL[i];right[offset+i]+=mixR[i];}
       }

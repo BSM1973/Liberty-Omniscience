@@ -131,6 +131,17 @@ jobs:
             ./build/CosmosBenchmark --nexus-long > cosmos-nexus-long.csv
           fi
           cat cosmos-nexus-long.csv
+      - name: 100 FX and 300 profiles qualification
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ./build/Release/CosmosBenchmark.exe --fx-qa > cosmos-fx-qualification.csv
+            ./build/Release/CosmosBenchmark.exe --fx-40 > cosmos-fx-40.csv
+          else
+            ./build/CosmosBenchmark --fx-qa > cosmos-fx-qualification.csv
+            ./build/CosmosBenchmark --fx-40 > cosmos-fx-40.csv
+          fi
+          cat cosmos-fx-40.csv
       - uses: actions/upload-artifact@v4
         with:
           name: Cosmos-benchmark-${{ matrix.name }}
@@ -140,6 +151,8 @@ jobs:
             cosmos-modulation-performance.csv
             cosmos-nexus-performance.csv
             cosmos-nexus-long.csv
+            cosmos-fx-qualification.csv
+            cosmos-fx-40.csv
           if-no-files-found: error
       - name: Package macOS development binaries
         if: runner.os == 'macOS'
@@ -170,12 +183,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
         with:
-          name: Omniscience-v0.7.5-macOS-ARM64
+          name: Omniscience-v0.7.6-macOS-ARM64
           path: Omniscience-macOS-ARM64.zip
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
-          name: Omniscience-v0.7.5-Windows-x64
+          name: Omniscience-v0.7.6-Windows-x64
           path: Omniscience-Windows-x64.zip
           if-no-files-found: error

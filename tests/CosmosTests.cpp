@@ -527,5 +527,16 @@ int main(){
   p.enabled=false;for(int j=0;j<2048;++j){float l=.2f,r=.3f;s.tick(l,r,p,sr,m);if(j==2047)check(l==.2f&&r==.3f,"creative bypass");}
  }
  }
+
+ {
+ for(int size:{512,1024,2048,4096}){
+  cosmos::CreativeFFT f;f.prepare();f.select(size);
+  double err=0,energy=0;for(int j=0;j<size*5;++j){float x=.25f*std::sin(j*.071f),v[2]={x,x};f.tick(v,80,.5f,0,false,48000);if(j>=size*3){float expected=.25f*std::sin((j-size)*.071f);err+=std::abs(v[0]-expected);energy+=std::abs(expected);}}
+  check(err/std::max(energy,1e-9)<2e-4,"HD FFT overlap add");
+  cosmos::FxSlotState s;s.prepare();cosmos::FxParams p;p.type=80;p.enabled=true;p.mix=0;p.fftQuality=int(std::log2(size/512));std::array<float,8> m{};for(int j=0;j<=size;++j){float l=j==0?1:0,r=l;s.tick(l,r,p,48000,m);check(std::abs(l-(j==size?1.f:0.f))<1e-6f,"aligned spectral dry");}
+ }
+ cosmos::Patch p;p.fx[0].slots[0].enabled=true;p.fx[0].slots[0].type=80;p.fx[0].slots[0].fftQuality=2;p.fx[0].slots[1]=p.fx[0].slots[0];p.fx[4].slots[0]=p.fx[0].slots[0];check(cosmos::Engine::latency(p)==6144,"layer plus master latency");p.fx[0].parallel=true;check(cosmos::Engine::latency(p)==4096,"parallel rack latency");
+ cosmos::FxRack r;r.parallel=true;r.slots[0].type=80;r.slots[0].enabled=true;r.slots[0].mix=0;r.slots[1].type=1;r.slots[1].enabled=true;r.slots[1].mix=0;cosmos::FxRackState state;for(auto& s:state.slots)s.prepare();std::array<float,8> m{};for(int j=0;j<1024;++j){float l=j==0?1:0,rr=l;state.tick(l,rr,r,48000,m);check(std::abs(l-(j==512?1.f:0.f))<1e-6f,"parallel aligned impulse");}
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }

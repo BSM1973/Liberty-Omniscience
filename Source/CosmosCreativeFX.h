@@ -8,42 +8,44 @@ namespace cosmos {
 // Streaming WOLA processor. 512 samples of intrinsic latency, 128-sample hop.
 // The held spectral reference is captured from the same slot, not an external sidechain.
 struct CreativeFFT {
- static constexpr int n=512,hop=128,bins=n/2+1;
+ static constexpr int maxN=4096,maxBins=maxN/2+1;int n=512,hop=128,bins=257;
  using C=std::complex<float>;
  static constexpr float pi=3.14159265358979323846f,tau=2*pi;
  struct Channel {
-  std::array<float,n> input{},output{};
-  std::array<C,n> work{},original{};
-  std::array<float,bins> held{},prevPhase{},heldPhase{},advance{},envelope{},carrierPhase{};
+  std::array<float,maxN> input{},output{};
+  std::array<C,maxN> work{},original{};
+  std::array<float,maxBins> held{},prevPhase{},heldPhase{},advance{},envelope{},carrierPhase{};
   bool captured=false,wasFreeze=false,phaseReady=false;
  };
  std::vector<Channel> channels;
- std::array<float,n> window{};
- std::array<C,n/2> twiddle{};
+ std::array<float,maxN> window{};
+ std::array<C,maxN/2> twiddle{};
  int pos=0,filled=0,clock=0;
  void prepare(){
   channels.resize(2);
-  for(int j=0;j<n;++j)window[j]=.5f-.5f*std::cos(tau*j/n);
-  for(int j=0;j<n/2;++j)twiddle[j]=C(std::cos(-tau*j/n),std::sin(-tau*j/n));
+  for(int j=0;j<maxN;++j)window[j]=.5f-.5f*std::cos(tau*j/maxN);
+  for(int j=0;j<maxN/2;++j)twiddle[j]=C(std::cos(-tau*j/maxN),std::sin(-tau*j/maxN));
   reset();
  }
  void reset()noexcept{pos=filled=clock=0;for(auto& c:channels)c=Channel{};}
- void fft(std::array<C,n>& a,bool inverse)const noexcept{
+ void select(int size)noexcept{size=std::clamp(size,512,maxN);if(size!=n){n=size;hop=n/4;bins=n/2+1;reset();}}
+ template<size_t N> void fft(std::array<C,N>& a,bool inverse)const noexcept{
+  const int n=std::min(int(N),this->n);
   for(int i=1,j=0;i<n;++i){int bit=n>>1;for(;j&bit;bit>>=1)j^=bit;j^=bit;if(i<j)std::swap(a[i],a[j]);}
   for(int len=2;len<=n;len*=2)for(int i=0;i<n;i+=len)for(int j=0;j<len/2;++j){
-   C w=twiddle[j*n/len];if(inverse)w=std::conj(w);const C u=a[i+j],v=a[i+j+len/2]*w;
+   C w=twiddle[j*maxN/len];if(inverse)w=std::conj(w);const C u=a[i+j],v=a[i+j+len/2]*w;
    a[i+j]=u+v;a[i+j+len/2]=u-v;
   }
-  if(inverse)for(auto& x:a)x/=float(n);
+  if(inverse)for(int j=0;j<n;++j)a[j]/=float(n);
  }
  static float wrap(float p)noexcept{return std::remainder(p,tau);}
- static float magnitudeAt(const std::array<float,bins>& a,float x)noexcept{
+ float magnitudeAt(const std::array<float,maxBins>& a,float x)const noexcept{
   if(x<0||x>bins-1)return 0;int k=int(x);return std::lerp(a[k],a[std::min(k+1,bins-1)],x-k);
  }
  void frame(Channel& c,int type,float a,float b,bool freeze,float sr)noexcept{
-  for(int j=0;j<n;++j)c.work[j]=C(c.input[(pos+j)%n]*window[j],0);
-  fft(c.work,false);c.original=c.work;
-  std::array<float,bins> mag{},arg{},step{};
+  for(int j=0;j<n;++j)c.work[j]=C(c.input[(pos+j)%n]*window[j*maxN/n],0);
+  fft(c.work,false);std::copy_n(c.work.begin(),n,c.original.begin());
+  std::array<float,maxBins> mag{},arg{},step{};
   float total=0;
   for(int k=0;k<bins;++k){
    mag[k]=std::abs(c.original[k]);arg[k]=std::arg(c.original[k]);total+=mag[k];
@@ -58,17 +60,17 @@ struct CreativeFFT {
   }
   c.wasFreeze=freeze;
   if(type==88||type==89){
-   for(int k=0;k<bins;++k){float sum=0;int count=0;for(int j=std::max(0,k-4);j<=std::min(bins-1,k+4);++j){sum+=mag[j];++count;}c.envelope[k]=sum/count;}
+   const int radius=std::max(2,int(400*n/sr));float sum=0;int lo=0,hi=std::min(bins-1,radius);for(int j=lo;j<=hi;++j)sum+=mag[j];for(int k=0;k<bins;++k){int l=std::max(0,k-radius),h=std::min(bins-1,k+radius);while(lo<l)sum-=mag[lo++];while(hi<h)sum+=mag[++hi];c.envelope[k]=std::max(0.f,sum/(hi-lo+1));}
   }
   for(int k=0;k<bins;++k){
    float m=mag[k],ph=arg[k];C z=c.original[k];
    switch(type){
     case 79:if(c.captured){c.heldPhase[k]=wrap(c.heldPhase[k]+c.advance[k]);z=std::lerp(0.f,1.f,freeze?1.f:a)*std::polar(c.held[k],c.heldPhase[k])+(1-(freeze?1.f:a))*z;}break;
-    case 80:{int radius=1+int(a*12);float sum=0,weight=0;for(int j=std::max(0,k-radius);j<=std::min(bins-1,k+radius);++j){float w=float(radius+1-std::abs(j-k));sum+=mag[j]*w;weight+=w;}m=std::lerp(m,sum/weight,b);z=std::polar(m,ph);break;}
+    case 80:{int radius=1+int(a*12*n/512.f);float sum=0,weight=0;for(int j=std::max(0,k-radius);j<=std::min(bins-1,k+radius);++j){float w=float(radius+1-std::abs(j-k));sum+=mag[j]*w;weight+=w;}m=std::lerp(m,sum/weight,b);z=std::polar(m,ph);break;}
     case 81:if(c.captured){m=std::lerp(m,c.held[k],a);z=std::polar(m,ph);}break;
-    case 82:{int shift=int(std::round((2*a-1)*32));int src=k-shift;z=src>=0&&src<bins?c.original[src]*std::polar(1.f,tau*shift*float((clock/hop)%4)*hop/n):C{};z=(1-b)*c.original[k]+b*z;break;}
-    case 83:{float threshold=.02f*std::pow(1000.f,a);float g=m>=threshold?1.f:std::pow(m/std::max(threshold,1e-8f),1+7*b);z*=g;break;}
-    case 84:{float threshold=.1f*std::pow(100.f,a);if(m>threshold)z*=std::pow(threshold/m,1-1/(1+15*b));break;}
+    case 82:{int shift=int(std::round((2*a-1)*32*n/512.f));int src=k-shift;z=src>=0&&src<bins?c.original[src]*std::polar(1.f,tau*shift*float((clock/hop)%4)*hop/n):C{};z=(1-b)*c.original[k]+b*z;break;}
+    case 83:{float threshold=.02f*(n/512.f)*std::pow(1000.f,a);float g=m>=threshold?1.f:std::pow(m/std::max(threshold,1e-8f),1+7*b);z*=g;break;}
+    case 84:{float threshold=.1f*(n/512.f)*std::pow(100.f,a);if(m>threshold)z*=std::pow(threshold/m,1-1/(1+15*b));break;}
     case 88:{float ratio=std::exp2(2*a-1);float target=magnitudeAt(c.envelope,k/ratio);float gain=std::clamp(target/std::max(.02f,c.envelope[k]),.1f,5.f);z*=std::lerp(1.f,gain,b);break;}
     case 89:{float fundamental=55.f*std::exp2(3*a);float hz=k*sr/n;int harmonic=std::max(1,int(std::round(hz/fundamental)));float center=harmonic*fundamental*n/sr;float distance=std::abs(k-center);float carrier=std::exp(-distance*distance*.7f)/std::sqrt(float(harmonic));c.carrierPhase[k]=wrap(c.carrierPhase[k]+tau*harmonic*fundamental*hop/sr);z=std::polar(c.envelope[k]*carrier*3.f,c.carrierPhase[k]);z=(1-b)*c.original[k]+b*z;break;}
     default:break;
@@ -77,7 +79,7 @@ struct CreativeFFT {
    c.work[k]=z;if(k>0&&k<n/2)c.work[n-k]=std::conj(z);
   }
   fft(c.work,true);
-  for(int j=0;j<n;++j)c.output[(pos+j)%n]+=c.work[j].real()*window[j]*(2.f/3.f);
+  for(int j=0;j<n;++j)c.output[(pos+j)%n]+=c.work[j].real()*window[j*maxN/n]*(2.f/3.f);
  }
  void tick(float* v,int type,float a,float b,bool freeze,double sr)noexcept{
   if(channels.size()!=2)return;
@@ -87,6 +89,7 @@ struct CreativeFFT {
   if(filled==n&&clock%hop==0)for(auto& c:channels)frame(c,type,a,b,freeze,float(sr));
  }
 };
+inline int fftSize(int quality)noexcept{return 512<<std::clamp(quality,0,3);}
 inline bool creativeSpectral(int type)noexcept{return (type>=79&&type<=84)||type==88||type==89;}
 inline bool creativeSync(int type)noexcept{return type>=92&&type<=94;}
 inline bool creativeFreeze(int type)noexcept{return type==79||type==81;}
@@ -109,7 +112,7 @@ struct CreativeState{
  float read(int c,float d)const noexcept{
   int n=int(ring[c].size());if(n<4)return 0;d=std::clamp(d,1.f,float(n-2));int j=int(d);float f=d-j;
   float x=j<=valid?ring[c][(write-j+n)%n]:0,y=j+1<=valid?ring[c][(write-j-1+n)%n]:0;
-  return std::lerp(x,y,f);
+  const float z=j>1&&j-1<=valid?ring[c][(write-j+1+n)%n]:x,w=j+2<=valid?ring[c][(write-j-2+n)%n]:y;return safe(x+.5f*f*(y-z+f*(2*z-5*x+4*y-w+f*(3*(x-y)+w-z))));
  }
  float grains(int c,float ph,float span,float base,float ratio)const noexcept{
   float q=ph+.5f;if(q>=1)q-=1;
@@ -122,10 +125,10 @@ struct CreativeState{
   float y=safe((1-radius)*x+g*reson1[c][k]-radius*radius*reson2[c][k]);
   reson2[c][k]=reson1[c][k];reson1[c][k]=y;return y;
  }
- void tick(float* v,int type,float a,float b,bool sync,double bpm,bool freeze,double sr)noexcept{
+ void tick(float* v,int type,float a,float b,bool sync,double bpm,bool freeze,double sr,int fftQuality=0)noexcept{
   if(ring[0].empty())return;
   const float rate=float(sr),tau=CreativeFFT::tau;
-  if(creativeSpectral(type)){spectral.tick(v,type,a,b,freeze,sr);for(int c=0;c<2;++c)v[c]=safe(v[c]);}
+  if(creativeSpectral(type)){spectral.select(fftSize(fftQuality));spectral.tick(v,type,a,b,freeze,sr);for(int c=0;c<2;++c)v[c]=safe(v[c]);}
   else{
    float in[2]={safe(v[0]),safe(v[1])},store[2]={in[0],in[1]};
    const float span=rate*(.025f+.075f*a),pitchSpan=rate*.06f;
@@ -141,7 +144,7 @@ struct CreativeState{
      case 86:y=(1-b)*x+b*.55f*(grains(c,phase,pitchSpan,pitchSpan+2,ratio)+grains(c,phase2,pitchSpan,pitchSpan+2,1.5f));break;
      case 87:y=std::lerp(x,grains(c,phase,pitchSpan,pitchSpan+2,octave),b);break;
      case 90:y=.65f*grains(c,phase,span,span+2,1.2f+b*.6f)+.35f*grains(1-c,phase2,span,span+2,.65f+.3f*b);break;
-     case 91:y=grains(c,phase,rate*.09f,rate*.1f,stretch);y=std::lerp(y,.5f*(y+read(c,rate*.045f)),b*.6f);break;
+     case 91:{float main=grains(c,phase,rate*.09f,rate*.12f,stretch);float second=grains(c,phase2,rate*.067f,rate*.1f,stretch);y=std::lerp(main,second,.5f*b);break;}
      case 92:case 93:case 94:{
       int p=cycle%period,sub=p%unit,segment=p/unit;
       if(type==94&&segment==0){y=x;break;}
@@ -163,7 +166,7 @@ struct CreativeState{
    if(++write==int(ring[0].size()))write=0;valid=std::min(valid+1,int(ring[0].size())-1);
    if(++cycle>=period)cycle=0;
    advance(phase,type==97?freq/rate:1/std::max(16.f,type==90?span:type==91?rate*.09f:pitchSpan));
-   advance(phase2,1/std::max(16.f,span*.77f));
+   advance(phase2,1/std::max(16.f,type==86?pitchSpan:type==91?rate*.067f:span*.77f));
   }
   activity=std::max(std::max(std::abs(v[0]),std::abs(v[1])),activity*.9995f);
  }

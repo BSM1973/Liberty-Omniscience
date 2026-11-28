@@ -25,7 +25,39 @@ int nexusBenchmark(bool longRun){
  std::sort(times.begin(),times.end());std::cout<<(hd?"hd20_unison16":"nexus_morph_matrix")<<','<<(fast?"shared":"reference")<<','<<sr<<','<<n<<",32,"<<blocks*n/sr<<','<<sum/blocks<<','<<times[size_t(.95*(blocks-1))]<<','<<times[size_t(.99*(blocks-1))]<<','<<times.back()<<','<<misses<<','<<finite<<','<<peak<<std::endl;return finite;};
  bool ok=true;if(longRun){ok&=run(128,48000,600,true,false);}else{for(double sr:{44100.,48000.,96000.,192000.})for(int n:{64,128,256,512,1024})for(bool fast:{false,true})ok&=run(n,sr,.10,fast,false);for(bool fast:{false,true}){ok&=run(128,48000,1,fast,true);ok&=run(128,48000,60,fast,false);}}return ok?0:1;
 }
-int main(int argc,char** argv){if(argc>1&&std::string(argv[1])=="--nexus")return nexusBenchmark(false);if(argc>1&&std::string(argv[1])=="--nexus-long")return nexusBenchmark(true);if(argc>1&&std::string(argv[1])=="--modulation")return modulationBenchmark();
+
+int fxQualification(){
+ constexpr int n=128;constexpr double sr=48000.;
+ std::cout<<"effect,profile,peak,rms,delta_rms,finite,mean_budget_pct\n";
+ auto s=std::make_unique<cosmos::FxSlotState>();s->prepare(sr);std::array<float,8> m{};
+ for(int type=1;type<cosmos::fxTypes;++type)for(int profile=1;profile<=3;++profile){
+  s->reset();cosmos::FxParams p;p.enabled=true;p.type=type;p.a=p.b=profile==1?.2f:profile==2?.5f:.8f;
+  if(type>=79){auto q=cosmos::creativePreset(type,profile);p.a=q[0];p.b=q[1];}
+  else if(type>=64){auto q=cosmos::reverbPreset(type,profile);p.a=q[0];p.b=q[1];p.delayFeedbackR=q[2];p.delayTone=q[3];p.stereo=q[4];}
+  else if(type>=49){auto q=cosmos::echoPreset(type,profile);p.a=q[0];p.b=q[1];p.delayFeedbackR=q[2];p.delayTone=q[3];}
+  bool finite=true;double sq=0,diff=0;float peak=0;int frames=48000;
+  auto start=std::chrono::steady_clock::now();
+  for(int j=0;j<frames;++j){float dry=j<12000?.45f*std::sin(j*.061f)+.2f*std::sin(j*.147f):0,l=dry,r=j<12000?.35f*std::cos(j*.089f):0;s->tick(l,r,p,sr,m);finite&=std::isfinite(l)&&std::isfinite(r);peak=std::max({peak,std::abs(l),std::abs(r)});sq+=double(l)*l+double(r)*r;diff+=double(l-dry)*(l-dry);}
+  double budget=100*std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count()/(frames/sr);
+  std::cout<<type<<','<<profile<<','<<peak<<','<<std::sqrt(sq/(2*frames))<<','<<std::sqrt(diff/frames)<<','<<finite<<','<<budget<<'\n';if(!finite)return 1;
+ }
+ return 0;
+}
+int fxFortyBenchmark(){
+ constexpr int n=128;constexpr double sr=48000.;
+ std::cout<<"scenario,slots,rendered_seconds,mean_budget_pct,p95,p99,max,misses,peak,finite\n";
+ for(int mode=0;mode<3;++mode){
+  auto e=std::make_unique<cosmos::Engine>();e->prepare(sr);cosmos::Patch p;
+  const int mixed[]={9,19,29,49,64,80,90,99};
+  for(int k=0;k<5;++k){p.fx[k].parallel=mode==2;for(int j=0;j<8;++j){auto& f=p.fx[k].slots[j];f.enabled=true;f.type=mode==0?mixed[j]:mode==1?80:mixed[j];f.mix=.15f;f.a=.55f;f.b=.55f;f.fftQuality=mode==1?2:0;}}
+  for(int j=0;j<8;++j)e->noteOn(0,48+j,.65f);
+  int blocks=mode==0?22500:375;std::vector<double> times;times.reserve(blocks);double sum=0;int misses=0;float peak=0;bool finite=true;
+  for(int j=0;j<blocks;++j){std::array<float,n> l{},r{};auto start=std::chrono::steady_clock::now();e->render(l.data(),r.data(),n,p);double cost=100*std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count()/(n/sr);times.push_back(cost);sum+=cost;misses+=cost>100;for(int i=0;i<n;++i){finite&=std::isfinite(l[i])&&std::isfinite(r[i]);peak=std::max({peak,std::abs(l[i]),std::abs(r[i])});}}
+  std::sort(times.begin(),times.end());std::cout<<(mode==0?"mixed_serial":mode==1?"fft2048_serial":"mixed_parallel")<<",40,"<<blocks*n/sr<<','<<sum/blocks<<','<<times[size_t(.95*(blocks-1))]<<','<<times[size_t(.99*(blocks-1))]<<','<<times.back()<<','<<misses<<','<<peak<<','<<finite<<std::endl;if(!finite)return 1;
+ }
+ return 0;
+}
+int main(int argc,char** argv){if(argc>1&&std::string(argv[1])=="--fx-qa")return fxQualification();if(argc>1&&std::string(argv[1])=="--fx-40")return fxFortyBenchmark();if(argc>1&&std::string(argv[1])=="--nexus")return nexusBenchmark(false);if(argc>1&&std::string(argv[1])=="--nexus-long")return nexusBenchmark(true);if(argc>1&&std::string(argv[1])=="--modulation")return modulationBenchmark();
   constexpr int n=128;constexpr double sr=48000.;const bool longRun=argc>1&&std::string(argv[1])=="--long";const int blocks=longRun?22500:375;
   auto engine=std::make_unique<cosmos::Engine>();auto& e=*engine;e.prepare(sr);
   std::vector<float> l(n),r(n);
