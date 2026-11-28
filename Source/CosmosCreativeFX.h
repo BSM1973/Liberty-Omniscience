@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include "CosmosSIMD.h"
 namespace cosmos {
 // Streaming WOLA processor. 512 samples of intrinsic latency, 128-sample hop.
 // The held spectral reference is captured from the same slot, not an external sidechain.
@@ -12,28 +13,28 @@ struct CreativeFFT {
  using C=std::complex<float>;
  static constexpr float pi=3.14159265358979323846f,tau=2*pi;
  struct Channel {
-  std::array<float,maxN> input{},output{};
+  std::array<float,maxN> input{},output{},real{};
   std::array<C,maxN> work{},original{};
   std::array<float,maxBins> held{},prevPhase{},heldPhase{},advance{},envelope{},carrierPhase{};
   bool captured=false,wasFreeze=false,phaseReady=false;
  };
  std::vector<Channel> channels;
- std::array<float,maxN> window{};
- std::array<C,maxN/2> twiddle{};
+ struct Plan{std::array<std::array<float,maxN>,4> window{};std::array<C,maxN/2> twiddle{};Plan(){for(int q=0;q<4;++q){int size=512<<q;for(int j=0;j<size;++j)window[q][j]=.5f-.5f*std::cos(tau*j/size);}for(int j=0;j<maxN/2;++j)twiddle[j]=C(std::cos(-tau*j/maxN),std::sin(-tau*j/maxN));}};
+ static const Plan& plan(){static const Plan p;return p;}
+ const Plan* preparedPlan=nullptr;int quality=0;
  int pos=0,filled=0,clock=0;
  void prepare(){
   channels.resize(2);
-  for(int j=0;j<maxN;++j)window[j]=.5f-.5f*std::cos(tau*j/maxN);
-  for(int j=0;j<maxN/2;++j)twiddle[j]=C(std::cos(-tau*j/maxN),std::sin(-tau*j/maxN));
+  preparedPlan=&plan();
   reset();
  }
  void reset()noexcept{pos=filled=clock=0;for(auto& c:channels)c=Channel{};}
- void select(int size)noexcept{size=std::clamp(size,512,maxN);if(size!=n){n=size;hop=n/4;bins=n/2+1;reset();}}
+ void select(int size)noexcept{size=std::clamp(size,512,maxN);if(size!=n){n=size;hop=n/4;bins=n/2+1;quality=n==512?0:n==1024?1:n==2048?2:3;reset();}}
  template<size_t N> void fft(std::array<C,N>& a,bool inverse)const noexcept{
   const int n=std::min(int(N),this->n);
   for(int i=1,j=0;i<n;++i){int bit=n>>1;for(;j&bit;bit>>=1)j^=bit;j^=bit;if(i<j)std::swap(a[i],a[j]);}
   for(int len=2;len<=n;len*=2)for(int i=0;i<n;i+=len)for(int j=0;j<len/2;++j){
-   C w=twiddle[j*maxN/len];if(inverse)w=std::conj(w);const C u=a[i+j],v=a[i+j+len/2]*w;
+   C w=preparedPlan->twiddle[j*maxN/len];if(inverse)w=std::conj(w);const C u=a[i+j],v=a[i+j+len/2]*w;
    a[i+j]=u+v;a[i+j+len/2]=u-v;
   }
   if(inverse)for(int j=0;j<n;++j)a[j]/=float(n);
@@ -43,7 +44,7 @@ struct CreativeFFT {
   if(x<0||x>bins-1)return 0;int k=int(x);return std::lerp(a[k],a[std::min(k+1,bins-1)],x-k);
  }
  void frame(Channel& c,int type,float a,float b,bool freeze,float sr)noexcept{
-  for(int j=0;j<n;++j)c.work[j]=C(c.input[(pos+j)%n]*window[j*maxN/n],0);
+  const auto& window=preparedPlan->window[quality];for(int j=0;j<n;++j)c.work[j]=C(c.input[(pos+j)%n]*window[j],0);
   fft(c.work,false);std::copy_n(c.work.begin(),n,c.original.begin());
   std::array<float,maxBins> mag{},arg{},step{};
   float total=0;
@@ -79,7 +80,7 @@ struct CreativeFFT {
    c.work[k]=z;if(k>0&&k<n/2)c.work[n-k]=std::conj(z);
   }
   fft(c.work,true);
-  for(int j=0;j<n;++j)c.output[(pos+j)%n]+=c.work[j].real()*window[j*maxN/n]*(2.f/3.f);
+  for(int j=0;j<n;++j)c.real[j]=c.work[j].real();int first=n-pos;fxWindowAdd(c.output.data()+pos,c.real.data(),window.data(),first,2);fxWindowAdd(c.output.data(),c.real.data()+first,window.data()+first,pos,2);
  }
  void tick(float* v,int type,float a,float b,bool freeze,double sr)noexcept{
   if(channels.size()!=2)return;

@@ -1,5 +1,11 @@
 #include <immintrin.h>
 namespace cosmos {
+void fxWindowAddAVX2(float* out,const float* signal,const float* window,int n)noexcept{
+ const auto g=_mm256_set1_ps(2.f/3.f);int i=0;
+ for(;i+7<n;i+=8){auto x=_mm256_mul_ps(_mm256_loadu_ps(signal+i),_mm256_loadu_ps(window+i));_mm256_storeu_ps(out+i,_mm256_add_ps(_mm256_loadu_ps(out+i),_mm256_mul_ps(x,g)));}
+ for(;i<n;++i)out[i]+=signal[i]*window[i]*(2.f/3.f);
+ _mm256_zeroupper();
+}
 void advancePhasesAVX2(double* phase,const double* delta,int n) noexcept {
  const auto one=_mm256_set1_pd(1.);
  int i=0;

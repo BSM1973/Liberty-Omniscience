@@ -9,6 +9,7 @@
 #endif
 namespace cosmos {
 #if defined(COSMOS_AVX2_DISPATCH) && defined(_M_X64)
+void fxWindowAddAVX2(float*,const float*,const float*,int) noexcept;
 void advancePhasesAVX2(double*,const double*,int) noexcept;
 void interpolateAVX2(float*,const float*,const float*,const float*,const float*,const float*,float,int) noexcept;
 inline bool hasAVX2() noexcept {
@@ -74,6 +75,18 @@ inline void interpolateAdd(float* out,const float* a,const float* aa,const float
  }
 #endif
  for(;i<n;++i){float x=a[i]+(aa[i]-a[i])*t[i],y=b[i]+(bb[i]-b[i])*t[i];out[i]+=x+(y-x)*morph;}
+}
+inline void fxWindowAdd(float* out,const float* signal,const float* window,int n,int mode)noexcept{
+#if defined(COSMOS_AVX2_DISPATCH) && defined(_M_X64)
+ if(mode==2&&hasAVX2()){fxWindowAddAVX2(out,signal,window,n);return;}
+#endif
+ int i=0;
+#if defined(__aarch64__)
+ if(mode){const auto g=vdupq_n_f32(2.f/3.f);for(;i+3<n;i+=4){auto x=vmulq_f32(vld1q_f32(signal+i),vld1q_f32(window+i));vst1q_f32(out+i,vaddq_f32(vld1q_f32(out+i),vmulq_f32(x,g)));}}
+#elif defined(__SSE2__) || defined(_M_X64)
+ if(mode){const auto g=_mm_set1_ps(2.f/3.f);for(;i+3<n;i+=4){auto x=_mm_mul_ps(_mm_loadu_ps(signal+i),_mm_loadu_ps(window+i));_mm_storeu_ps(out+i,_mm_add_ps(_mm_loadu_ps(out+i),_mm_mul_ps(x,g)));}}
+#endif
+ for(;i<n;++i)out[i]+=signal[i]*window[i]*(2.f/3.f);
 }
 inline void advancePhases(double* phase,const double* delta,int n) noexcept {
 #if defined(COSMOS_AVX2_DISPATCH) && defined(_M_X64)

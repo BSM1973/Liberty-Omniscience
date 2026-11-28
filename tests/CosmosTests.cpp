@@ -529,6 +529,7 @@ int main(){
  }
 
  {
+ {std::array<float,257> a{},b{},c{},w{};for(int j=0;j<257;++j){a[j]=b[j]=.1f*std::sin(j*.2f);c[j]=std::cos(j*.07f);w[j]=.5f+.5f*std::sin(j*.03f);}cosmos::fxWindowAdd(a.data(),c.data(),w.data(),257,0);cosmos::fxWindowAdd(b.data(),c.data(),w.data(),257,2);for(int j=0;j<257;++j)check(std::abs(a[j]-b[j])<2e-7f,"FFT overlap SIMD A/B");}
  for(int size:{512,1024,2048,4096}){
   cosmos::CreativeFFT f;f.prepare();f.select(size);
   double err=0,energy=0;for(int j=0;j<size*5;++j){float x=.25f*std::sin(j*.071f),v[2]={x,x};f.tick(v,80,.5f,0,false,48000);if(j>=size*3){float expected=.25f*std::sin((j-size)*.071f);err+=std::abs(v[0]-expected);energy+=std::abs(expected);}}
