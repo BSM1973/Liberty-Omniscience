@@ -539,5 +539,14 @@ int main(){
  cosmos::Patch p;p.fx[0].slots[0].enabled=true;p.fx[0].slots[0].type=80;p.fx[0].slots[0].fftQuality=2;p.fx[0].slots[1]=p.fx[0].slots[0];p.fx[4].slots[0]=p.fx[0].slots[0];check(cosmos::Engine::latency(p)==6144,"layer plus master latency");p.fx[0].parallel=true;check(cosmos::Engine::latency(p)==4096,"parallel rack latency");
  cosmos::FxRack r;r.parallel=true;r.slots[0].type=80;r.slots[0].enabled=true;r.slots[0].mix=0;r.slots[1].type=1;r.slots[1].enabled=true;r.slots[1].mix=0;cosmos::FxRackState state;for(auto& s:state.slots)s.prepare();std::array<float,8> m{};for(int j=0;j<1024;++j){float l=j==0?1:0,rr=l;state.tick(l,rr,r,48000,m);check(std::abs(l-(j==512?1.f:0.f))<1e-6f,"parallel aligned impulse");}
  }
+
+ {
+ std::array<float,cosmos::CreativeFFT::maxBins> m{},result{};
+ for(int j=0;j<1025;++j)m[j]=.2f+std::abs(std::sin(j*.135f));
+ for(int radius:{1,12,49}){cosmos::CreativeFFT::triangularBlur(m.data(),result.data(),1025,radius);for(int k=0;k<1025;++k){double sum=0,w=0;for(int j=std::max(0,k-radius);j<=std::min(1024,k+radius);++j){double z=radius+1-std::abs(j-k);sum+=m[j]*z;w+=z;}check(std::abs(result[k]-sum/w)<2e-6,"linear spectral blur equivalent");}}
+ for(int q=1;q<=4;++q){cosmos::FxFIR f;float peak=0;int at=-1;double sum=0;for(int j=0;j<120;++j){float x=f.tick(0,j==0?1.f:0.f,q,[](float v){return v;});sum+=x;if(std::abs(x)>peak){peak=std::abs(x);at=j;}}check(at==24&&std::abs(sum-1)<.001,"FIR unity DC and 24-sample latency");}
+ {cosmos::CreativeFFT f;f.prepare();f.select(1024);double high=0,low=0,hs=0,hc=0,ls=0,lc=0;
+  for(int j=0;j<8192;++j){float v[2]={.3f*std::sin(cosmos::CreativeFFT::tau*16*j/1024),0};f.tick(v,87,.8f,1,false,48000);if(j>=4096){float ph=cosmos::CreativeFFT::tau*j/1024;hs+=v[0]*std::sin(32*ph);hc+=v[0]*std::cos(32*ph);ls+=v[0]*std::sin(16*ph);lc+=v[0]*std::cos(16*ph);}}high=std::hypot(hs,hc);low=std::hypot(ls,lc);check(high>30&&high>low*2,"phase vocoder octave frequency");}
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }

@@ -15,7 +15,7 @@ struct CreativeFFT {
  struct Channel {
   std::array<float,maxN> input{},output{},real{};
   std::array<C,maxN> work{},original{};
-  std::array<float,maxBins> held{},prevPhase{},heldPhase{},advance{},envelope{},carrierPhase{};
+  std::array<float,maxBins> held{},prevPhase{},heldPhase{},advance{},envelope{},carrierPhase{},pitchPhase{},harmonyPhase{};
   bool captured=false,wasFreeze=false,phaseReady=false;
  };
  std::vector<Channel> channels;
@@ -43,16 +43,26 @@ struct CreativeFFT {
  float magnitudeAt(const std::array<float,maxBins>& a,float x)const noexcept{
   if(x<0||x>bins-1)return 0;int k=int(x);return std::lerp(a[k],a[std::min(k+1,bins-1)],x-k);
  }
+ static void triangularBlur(const float* mag,float* result,int bins,int radius)noexcept{
+  std::array<double,maxBins+1> sums{},weighted{};
+  for(int k=0;k<bins;++k){sums[k+1]=sums[k]+mag[k];weighted[k+1]=weighted[k]+double(k)*mag[k];}
+  for(int k=0;k<bins;++k){int lo=std::max(0,k-radius),hi=std::min(bins-1,k+radius);
+   double left=(radius+1-k)*(sums[k+1]-sums[lo])+weighted[k+1]-weighted[lo];
+   double right=(radius+1+k)*(sums[hi+1]-sums[k+1])-weighted[hi+1]+weighted[k+1];
+   int l=k-lo,r=hi-k;double weight=double(radius+1)*(1+l+r)-.5*(l*(l+1)+r*(r+1));
+   result[k]=float(std::max(0.,(left+right)/weight));
+  }
+ }
  void frame(Channel& c,int type,float a,float b,bool freeze,float sr)noexcept{
   const auto& window=preparedPlan->window[quality];for(int j=0;j<n;++j)c.work[j]=C(c.input[(pos+j)%n]*window[j],0);
   fft(c.work,false);std::copy_n(c.work.begin(),n,c.original.begin());
-  std::array<float,maxBins> mag{},arg{},step{};
+  std::array<float,maxBins> mag{},arg{},step{},blurred{};
+  const bool pitch=type>=85&&type<=87,needsPhase=type==79||pitch;const bool firstPhase=!c.phaseReady;
   float total=0;
   for(int k=0;k<bins;++k){
-   mag[k]=std::abs(c.original[k]);arg[k]=std::arg(c.original[k]);total+=mag[k];
+   mag[k]=std::abs(c.original[k]);if(needsPhase)arg[k]=std::arg(c.original[k]);total+=mag[k];
    float expected=tau*k*hop/n;
-   step[k]=c.phaseReady?expected+wrap(arg[k]-c.prevPhase[k]-expected):expected;
-   c.prevPhase[k]=arg[k];
+   if(needsPhase){step[k]=c.phaseReady?expected+wrap(arg[k]-c.prevPhase[k]-expected):expected;c.prevPhase[k]=arg[k];}
   }
   c.phaseReady=true;
   if(!freeze&&c.wasFreeze)c.captured=false;
@@ -60,18 +70,37 @@ struct CreativeFFT {
    c.held=mag;c.heldPhase=arg;c.advance=step;c.captured=true;
   }
   c.wasFreeze=freeze;
-  if(type==88||type==89){
+  if(pitch||type==88||type==89){
    const int radius=std::max(2,int(400*n/sr));float sum=0;int lo=0,hi=std::min(bins-1,radius);for(int j=lo;j<=hi;++j)sum+=mag[j];for(int k=0;k<bins;++k){int l=std::max(0,k-radius),h=std::min(bins-1,k+radius);while(lo<l)sum-=mag[lo++];while(hi<h)sum+=mag[++hi];c.envelope[k]=std::max(0.f,sum/(hi-lo+1));}
   }
+  if(type==80&&b>0)triangularBlur(mag.data(),blurred.data(),bins,1+int(a*12*n/512.f));
+  const float pitchRatio=std::exp2(std::round((2*a-1)*12.f)/12.f);
+  const float gateThreshold=.02f*(n/512.f)*std::pow(1000.f,a),compThreshold=.1f*(n/512.f)*std::pow(100.f,a);
+  const int shift=int(std::round((2*a-1)*32*n/512.f));const C shiftPhase=std::polar(1.f,tau*shift*float((clock/hop)%4)*hop/n);
+  const auto scaleMag=[](C z,float from,float to){return from>1e-12f?z*(to/from):C{};};
   for(int k=0;k<bins;++k){
    float m=mag[k],ph=arg[k];C z=c.original[k];
    switch(type){
     case 79:if(c.captured){c.heldPhase[k]=wrap(c.heldPhase[k]+c.advance[k]);z=std::lerp(0.f,1.f,freeze?1.f:a)*std::polar(c.held[k],c.heldPhase[k])+(1-(freeze?1.f:a))*z;}break;
-    case 80:{int radius=1+int(a*12*n/512.f);float sum=0,weight=0;for(int j=std::max(0,k-radius);j<=std::min(bins-1,k+radius);++j){float w=float(radius+1-std::abs(j-k));sum+=mag[j]*w;weight+=w;}m=std::lerp(m,sum/weight,b);z=std::polar(m,ph);break;}
-    case 81:if(c.captured){m=std::lerp(m,c.held[k],a);z=std::polar(m,ph);}break;
-    case 82:{int shift=int(std::round((2*a-1)*32*n/512.f));int src=k-shift;z=src>=0&&src<bins?c.original[src]*std::polar(1.f,tau*shift*float((clock/hop)%4)*hop/n):C{};z=(1-b)*c.original[k]+b*z;break;}
-    case 83:{float threshold=.02f*(n/512.f)*std::pow(1000.f,a);float g=m>=threshold?1.f:std::pow(m/std::max(threshold,1e-8f),1+7*b);z*=g;break;}
-    case 84:{float threshold=.1f*(n/512.f)*std::pow(100.f,a);if(m>threshold)z*=std::pow(threshold/m,1-1/(1+15*b));break;}
+    case 80:if(b>0)z=scaleMag(z,m,std::lerp(m,blurred[k],b));break;
+    case 81:if(c.captured){z=scaleMag(z,m,std::lerp(m,c.held[k],a));}break;
+    case 82:{int src=k-shift;z=src>=0&&src<bins?c.original[src]*shiftPhase:C{};z=(1-b)*c.original[k]+b*z;break;}
+    case 83:{float threshold=gateThreshold;float g=m>=threshold?1.f:std::pow(m/std::max(threshold,1e-8f),1+7*b);z*=g;break;}
+    case 84:{float threshold=compThreshold;if(m>threshold)z*=std::pow(threshold/m,1-1/(1+15*b));break;}
+    case 85:case 86:case 87:{
+     auto voice=[&](float ratio,std::array<float,maxBins>& phase){
+      float src=k/ratio;if(src>bins-1)return C{};int j=int(src);float frac=src-j;int next=std::min(j+1,bins-1);
+      float m=std::lerp(mag[j],mag[next],frac);
+      // Interpolate instantaneous frequency (rather than wrapping absolute bin phases).
+      float increment=std::lerp(step[j],step[next],frac)*ratio;
+      if(firstPhase)phase[k]=arg[j];else phase[k]=wrap(phase[k]+increment);
+      if(type==85){float old=magnitudeAt(c.envelope,src),target=c.envelope[k];m*=std::clamp(target/std::max(old,.015f),.5f,2.f);}
+      return std::polar(m,phase[k]);
+     };
+     float ratio=type==87?(a<.5f?.5f:2.f):pitchRatio;
+     C shifted=voice(ratio,c.pitchPhase);
+     if(type==86)shifted=.55f*(shifted+voice(1.5f,c.harmonyPhase));
+     z=(1-b)*z+b*shifted;break;}
     case 88:{float ratio=std::exp2(2*a-1);float target=magnitudeAt(c.envelope,k/ratio);float gain=std::clamp(target/std::max(.02f,c.envelope[k]),.1f,5.f);z*=std::lerp(1.f,gain,b);break;}
     case 89:{float fundamental=55.f*std::exp2(3*a);float hz=k*sr/n;int harmonic=std::max(1,int(std::round(hz/fundamental)));float center=harmonic*fundamental*n/sr;float distance=std::abs(k-center);float carrier=std::exp(-distance*distance*.7f)/std::sqrt(float(harmonic));c.carrierPhase[k]=wrap(c.carrierPhase[k]+tau*harmonic*fundamental*hop/sr);z=std::polar(c.envelope[k]*carrier*3.f,c.carrierPhase[k]);z=(1-b)*c.original[k]+b*z;break;}
     default:break;
@@ -91,7 +120,7 @@ struct CreativeFFT {
  }
 };
 inline int fftSize(int quality)noexcept{return 512<<std::clamp(quality,0,3);}
-inline bool creativeSpectral(int type)noexcept{return (type>=79&&type<=84)||type==88||type==89;}
+inline bool creativeSpectral(int type)noexcept{return type>=79&&type<=89;}
 inline bool creativeSync(int type)noexcept{return type>=92&&type<=94;}
 inline bool creativeFreeze(int type)noexcept{return type==79||type==81;}
 inline constexpr const char* creativeA[22]={"Maintien","Largeur","Morphing","Décalage","Seuil","Seuil","Intervalle","Intervalle","Octave","Formants","Porteuse","Taille grain","Vitesse","Durée","Durée","Durée","Fréquence","Fondamentale","Fréquence","Largeur","Attaque","Couleur"};
@@ -144,8 +173,8 @@ struct CreativeState{
      case 85:y=std::lerp(x,grains(c,phase,pitchSpan,pitchSpan+2,ratio),b);break;
      case 86:y=(1-b)*x+b*.55f*(grains(c,phase,pitchSpan,pitchSpan+2,ratio)+grains(c,phase2,pitchSpan,pitchSpan+2,1.5f));break;
      case 87:y=std::lerp(x,grains(c,phase,pitchSpan,pitchSpan+2,octave),b);break;
-     case 90:y=.65f*grains(c,phase,span,span+2,1.2f+b*.6f)+.35f*grains(1-c,phase2,span,span+2,.65f+.3f*b);break;
-     case 91:{float main=grains(c,phase,rate*.09f,rate*.12f,stretch);float second=grains(c,phase2,rate*.067f,rate*.1f,stretch);y=std::lerp(main,second,.5f*b);break;}
+     case 90:{float z=.65f*grains(c,phase,span,span+2,1.2f+b*.6f)+.35f*grains(1-c,phase2,span,span+2,.65f+.3f*b);float k=std::min(1.f,6.2831853f*std::min(rate*.42f,12000.f)/rate);filter[c]+=k*(z-filter[c]);y=filter[c];break;}
+     case 91:{float main=grains(c,phase,rate*.09f,rate*.12f,stretch);float second=grains(c,phase2,rate*.067f,rate*.1f,stretch);float onset=std::abs(x-previous[c]);previous[c]=x;fast[c]+=.045f*(onset-fast[c]);slow[c]+=.0015f*(onset-slow[c]);float transient=std::clamp((fast[c]-slow[c])*16.f,0.f,.75f);y=std::lerp(std::lerp(main,second,.5f*b),read(c,rate*.12f),transient);break;}
      case 92:case 93:case 94:{
       int p=cycle%period,sub=p%unit,segment=p/unit;
       if(type==94&&segment==0){y=x;break;}

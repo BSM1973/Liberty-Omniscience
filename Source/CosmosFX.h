@@ -9,7 +9,7 @@
 namespace cosmos {
 constexpr int fxRacks=5,fxSlots=8,fxTypes=101;
 struct FxParams{int type=0;bool enabled=false;float mix=1,input=1,output=1,a=.5f,b=.5f;int macro=0;float depth=0;bool autoGain=false;int quality=0,cc=-1;float ccValue=-1;bool sync=false;float stereo=.5f;double bpm=120;float delayFeedbackR=.5f,delayTone=.75f;bool delayFreeze=false;int fftQuality=0;};
-inline int fxLatency(const FxParams& p)noexcept{return p.enabled&&creativeSpectral(p.type)?fftSize(p.fftQuality):0;}
+inline int fxLatency(const FxParams& p)noexcept{return !p.enabled?0:creativeSpectral(p.type)?fftSize(p.fftQuality):p.type>=19&&p.type<29&&p.quality>0?24:0;}
 struct FxRack{bool parallel=false;std::array<FxParams,fxSlots> slots{};};
 inline int rackLatency(const FxRack& r)noexcept{int n=0;for(const auto& p:r.slots){const int v=fxLatency(p);n=r.parallel?std::max(n,v):n+v;}return n;}
 struct FxAlignment{std::array<std::vector<float>,2> ring;int write=0,valid=0,delay=-1;void prepare(int max){for(auto& v:ring)v.resize(size_t(max)+1);reset();}void reset()noexcept{write=valid=0;delay=-1;}void tick(float& l,float& r,int samples)noexcept{if(ring[0].empty())return;int n=int(ring[0].size());samples=std::clamp(samples,0,n-1);if(delay!=samples){reset();delay=samples;}if(!samples)return;int read=(write-samples+n)%n;float a=valid>=samples?ring[0][read]:0,b=valid>=samples?ring[1][read]:0;ring[0][write]=l;ring[1][write]=r;l=a;r=b;write=(write+1)%n;valid=std::min(valid+1,n-1);}};
@@ -27,6 +27,29 @@ inline float analogShape(int type,float x,float a,float b)noexcept{
  case 28:return std::lerp(z,std::abs(z),b)/(1+std::abs(z));
  default:return x;
  }}
+struct FxFIR{
+ static constexpr int half=12,baseTaps=2*half+1,maxFactor=16,maxTaps=2*half*maxFactor+1;
+ struct Plan{int factor=1,taps=1;std::array<std::array<float,baseTaps>,maxFactor> up{};std::array<float,maxTaps> down{};};
+ static const std::array<Plan,4>& plans(){
+  static const auto result=[](){std::array<Plan,4> q{};constexpr double pi=3.14159265358979323846;
+   auto kernel=[&](double x){if(std::abs(x)>half)return 0.;double z=.92*pi*x;double sinc=std::abs(z)<1e-10?.92:std::sin(z)/(pi*x);return sinc*(.42+.5*std::cos(pi*x/half)+.08*std::cos(2*pi*x/half));};
+   for(int k=0;k<4;++k){auto& p=q[k];p.factor=2<<k;p.taps=2*half*p.factor+1;
+    for(int phase=0;phase<p.factor;++phase){double sum=0;for(int j=0;j<baseTaps;++j){double v=kernel(j-half+double(phase)/p.factor);p.up[phase][j]=float(v);sum+=v;}for(auto& v:p.up[phase])v=float(v/sum);}
+    double sum=0;for(int j=0;j<p.taps;++j){double v=kernel(double(j)/p.factor-half)/p.factor;p.down[j]=float(v);sum+=v;}for(int j=0;j<p.taps;++j)p.down[j]=float(p.down[j]/sum);
+   }return q;}();return result;
+ }
+ std::array<std::array<float,baseTaps>,2> input{};std::array<std::array<float,maxTaps*2>,2> output{};
+ std::array<int,2> pos{};int quality=0;
+ void reset()noexcept{input={};output={};pos={};quality=0;}
+ template<class Shape>float tick(int c,float x,int q,Shape shape)noexcept{
+  const auto& p=plans()[std::clamp(q,1,4)-1];auto& in=input[c];auto& out=output[c];auto& at=pos[c];
+  for(int j=baseTaps-1;j>0;--j)in[j]=in[j-1];in[0]=x;
+  float y=0;for(int phase=0;phase<p.factor;++phase){float z=0;for(int j=0;j<baseTaps;++j)z+=p.up[phase][j]*in[j];float value=shape(z);out[at]=out[at+p.taps]=value;
+   if(phase==0){const int end=at+p.taps;for(int j=0;j<p.taps;++j)y+=p.down[j]*out[end-j];}
+   if(++at>=p.taps)at=0;
+  }return y;
+ }
+};
 inline float modulationHz(float a,bool sync,double bpm)noexcept{
  if(!sync)return .05f*std::exp2(8*a);
  constexpr float beats[]={16,8,4,2,1,.5f,.25f,.125f,.0625f};return float(std::clamp(bpm,20.,400.)/60)/beats[std::clamp(int(a*8+.5f),0,8)];
@@ -296,10 +319,10 @@ struct ReverbState{
 };
 
 struct FxSlotState{
- int type=0;float wet=0;std::array<float,2> low{},dc{},env{};float phase=0,reduction=0;std::array<float,2> low2{},previous{},fastEnv{},slowEnv{};std::array<float,3> bandEnv{};float linkedEnv=0;FxSpaceState space;EchoState echo;ReverbState reverb;CreativeState creative;FxAlignment dryAlign,parallelAlign;int spectralLatency=0;std::array<std::array<float,2>,2> osLP{};
- void prepare(double sr=48000){space.prepare();echo.prepare(sr);reverb.prepare(sr);creative.prepare(sr);dryAlign.prepare(4096);parallelAlign.prepare(4096);clear();wet=0;type=0;}
+ int type=0;float wet=0;std::array<float,2> low{},dc{},env{};float phase=0,reduction=0;std::array<float,2> low2{},previous{},fastEnv{},slowEnv{};std::array<float,3> bandEnv{};float linkedEnv=0;FxSpaceState space;EchoState echo;ReverbState reverb;CreativeState creative;FxAlignment dryAlign,parallelAlign;int spectralLatency=0;FxFIR fir;int firQuality=0;
+ void prepare(double sr=48000){(void)FxFIR::plans();space.prepare();echo.prepare(sr);reverb.prepare(sr);creative.prepare(sr);dryAlign.prepare(4096);parallelAlign.prepare(4096);clear();wet=0;type=0;}
  void reset()noexcept{clear();parallelAlign.reset();wet=0;type=0;}
- void clear()noexcept{low={};dc={};env={};low2={};previous={};fastEnv={};slowEnv={};bandEnv={};linkedEnv=0;phase=0;reduction=0;space.reset();echo.reset();reverb.reset();creative.reset();dryAlign.reset();spectralLatency=0;osLP={};}
+ void clear()noexcept{low={};dc={};env={};low2={};previous={};fastEnv={};slowEnv={};bandEnv={};linkedEnv=0;phase=0;reduction=0;space.reset();echo.reset();reverb.reset();creative.reset();dryAlign.reset();spectralLatency=0;fir.reset();firQuality=0;}
  bool active(const FxParams& p)const noexcept{return (p.enabled&&p.type>0)||wet>0;}
  void tick(float& l,float& r,const FxParams& p,double sr,const std::array<float,8>& macros)noexcept{
   const int desired=p.enabled?std::clamp(p.type,0,fxTypes-1):0;const int latency=fxLatency(p);
@@ -335,7 +358,7 @@ struct FxSlotState{
   else if(type>=64){reverb.tick(v,type,a,b,p,sr);space.phase=reverb.activity;}
   else if(type>=49){echo.tick(v,type,a,b,p,sr);space.phase=echo.phase;}
   else if(type>=29){space.tick(v,type,a,b,p.stereo,p.sync,p.bpm,sr);}
-  else if(type>=19){for(int c=0;c<2;++c){float x=v[c],out=0;int n=p.quality==2?4:p.quality==1?2:1;for(int j=1;j<=n;++j){float z=analogShape(type,std::lerp(previous[c],x,float(j)/n),a,b);if(n>1){const float k=1-std::exp(-6.28318530718f*.42f/n);osLP[c][0]+=k*(z-osLP[c][0]);osLP[c][1]+=k*(osLP[c][0]-osLP[c][1]);z=osLP[c][1];}out+=z;}previous[c]=x;v[c]=out/n;if(p.autoGain)v[c]/=std::sqrt(1+15*a);}}
+  else if(type>=19){if(firQuality!=p.quality){fir.reset();firQuality=p.quality;}for(int c=0;c<2;++c){auto shape=[&](float x){return analogShape(type,x,a,b);};v[c]=p.quality>0?fir.tick(c,v[c],p.quality,shape):shape(v[c]);if(p.autoGain)v[c]/=std::sqrt(1+15*a);}}
   else for(int c=0;c<2;++c){float x=v[c];switch(type){
    case 1:v[c]=x*(.125f+3.875f*a);break;
    case 2:{float drive=1+19*a;v[c]=std::tanh(x*drive)/std::tanh(drive);break;}
