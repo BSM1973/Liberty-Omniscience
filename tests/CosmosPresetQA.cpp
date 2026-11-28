@@ -129,7 +129,7 @@ int main(){
         return nullptr;
     };
     cosmosSetReferenceDSP(*b,true);
-    auto* ma=master(*a);auto* mb=master(*b);if(!ma||!mb||a->getNumPrograms()!=270)return 1;
+    auto* ma=master(*a);auto* mb=master(*b);if(!ma||!mb||a->getNumPrograms()!=370)return 1;
     std::filesystem::create_directories("cosmos-preset-audio");
     std::ofstream report("cosmos-presets.csv");
     report<<"preset,name,rms,peak,finite,reference_state_max_error,automation_restored,passed\n";
@@ -137,7 +137,7 @@ int main(){
     for(int i=0;i<a->getNumPrograms();++i){
         a->setCurrentProgram(i);ma->beginChangeGesture();ma->setValueNotifyingHost(.61f);ma->endChangeGesture();
         juce::MemoryBlock state;a->getStateInformation(state);
-        b->setCurrentProgram((i+1)%270);b->setStateInformation(state.getData(),int(state.getSize()));
+        b->setCurrentProgram((i+1)%370);b->setStateInformation(state.getData(),int(state.getSize()));
         auto r=render(*a),s=render(*b);float maxError=0;
         for(size_t j=0;j<r.data.size();++j)maxError=std::max(maxError,std::abs(r.data[j]-s.data[j]));
         bool restored=std::abs(mb->getValue()-.61f)<1e-5f&&b->getCurrentProgram()==i;
@@ -147,7 +147,7 @@ int main(){
         report<<i+1<<",\""<<a->getProgramName(i).toStdString()<<"\","<<r.rms<<','<<r.peak<<','<<r.finite<<','<<maxError<<','<<restored<<','<<ok<<'\n';
         if(!ok){++failed;std::cerr<<"Preset "<<i+1<<" failed\n";}
     }
-    std::cout<<270-failed<<"/270 presets passed automated DSP/state checks\n";
+    std::cout<<370-failed<<"/370 presets passed automated DSP/state checks\n";
     auto findParameter=[](juce::AudioProcessor& p,const juce::String& key)->juce::AudioProcessorParameter*{for(auto* x:p.getParameters())if(auto* id=dynamic_cast<juce::AudioProcessorParameterWithID*>(x))if(id->paramID==key)return x;return nullptr;};
     bool matrixRestored=true;a->setCurrentProgram(0);b->setCurrentProgram(0);
     const std::array<std::pair<const char*,float>,20> controls{{{"macro8",.71f},{"matrix64_enabled",1.f},{"matrix64_oscillator",.4f},{"matrix64_curve",1.f},{"matrix64_smoothing",.35f},{"modenv12_freeEnabled",1.f},{"modenv12_freeCount",.5f},{"modenv12_freeY2",.73f},{"modenv12_freeCurve1",1.f},{"matrix64_point2",.83f},{"lfo8_phase",.4f},{"modenv12_freeX2",.6f},{"nexusEnabled",1.f},{"nexusX",.3f},{"nexusY",.8f},{"nexusMacroX",.5f},{"nexusCCY",.5f},{"morphEnabled",1.f},{"morphAmount",.4f},{"morphCurve",.5f}}};
@@ -160,6 +160,6 @@ int main(){
     bool imported=qualifyImports();
     auto guiDir=juce::File::getCurrentWorkingDirectory().getChildFile("cosmos-ui-qa");
     bool layout=guiDir.createDirectory().wasOk()&&cosmosTestLayout(*a,guiDir);
-    std::cout<<"Editor geometry and forty-eight screenshots: "<<(layout?"passed":"FAILED")<<'\n';
+    std::cout<<"Editor geometry and fifty-one screenshots: "<<(layout?"passed":"FAILED")<<'\n';
     return failed||!report||!qualified||!imported||!layout?1:0;
 }

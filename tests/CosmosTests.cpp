@@ -1,6 +1,7 @@
 #include "CosmosEngine.h"
 #include "CosmosMotion.h"
 #include "CosmosTrajectory.h"
+#include "CosmosMutation.h"
 #include "CosmosParallelBench.h"
 #include <iostream>
 #include <vector>
@@ -442,6 +443,9 @@ int main(){
  {
  for(int i=0;i<50;++i){auto tr=cosmos::factoryTrajectory(i);check(tr.count==96,"trajectory factory size");auto c=tr.clip(4,true);for(int j=0;j<c.count;++j)check(std::isfinite(c.x[j])&&c.x[j]>=0&&c.x[j]<=1&&c.y[j]>=0&&c.y[j]<=1,"trajectory bounded");if(tr.closed)check(std::abs(c.x[0]-c.x[c.count-1])<1e-6f&&std::abs(c.y[0]-c.y[c.count-1])<1e-6f,"closed trajectory");tr.curve=true;auto q=tr.at(.42f);check(std::isfinite(q[0])&&std::isfinite(q[1]),"Bezier trajectory");}
  auto q=cosmos::shapeTrajectory({1,0},.5f,.5f,.5f,.5f,0,0);check(std::abs(q[0]-.75f)<1e-6f&&std::abs(q[1]-.25f)<1e-6f,"trajectory scale");
+ }
+ {
+ for(int mode=0;mode<7;++mode){cosmos::MutationRng a(4711),b(4711);for(int f=0;f<8;++f)for(int i=0;i<128;++i){float v=i/127.f;auto x=cosmos::mutationValue(v,1,mode,f,a),y=cosmos::mutationValue(v,1,mode,f,b);check(x==y&&x>=0&&x<=1,"deterministic bounded mutation");check(cosmos::mutationValue(v,0,mode,f,a)==v,"zero mutation");(void)cosmos::mutationValue(v,0,mode,f,b);}}
  }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }
