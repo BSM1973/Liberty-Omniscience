@@ -487,10 +487,10 @@ int main(){
  }
 
  {
- static_assert(cosmos::fxTypes==79);
+ static_assert(cosmos::fxTypes==101);
  std::array<double,15> signatures{};
  for(double sr:{44100.,48000.,96000.,192000.}){
-  for(int type=64;type<cosmos::fxTypes;++type){
+  for(int type=64;type<79;++type){
    cosmos::FxSlotState s;s.prepare(sr);cosmos::FxParams p;p.type=type;p.enabled=true;p.a=.6f;p.b=.75f;p.stereo=.6f;p.delayFeedbackR=.65f;p.delayTone=.7f;
    std::array<float,8> m{};double tail=0,weighted=0;
    for(int j=0;j<int(sr*.65);++j){
@@ -505,6 +505,24 @@ int main(){
  }
  for(int i=0;i<15;++i)for(int j=i+1;j<15;++j)check(std::abs(signatures[i]-signatures[j])>1e-7,"reverb modes have distinct signatures");
  {std::array<float,8> x={1,2,3,4,5,6,7,8};double before=0,after=0;for(float v:x)before+=v*v;cosmos::ReverbState::hadamard(x);for(float v:x)after+=v*v;check(std::abs(before-after)<1e-4,"orthogonal reverb matrix energy");}
+ }
+
+ {
+ // FFT round-trip, streaming latency and amplitude reconstruction.
+ cosmos::CreativeFFT fft;fft.prepare();std::array<cosmos::CreativeFFT::C,512> x{};
+ for(int j=0;j<512;++j)x[j]={std::sin(j*.13f),std::cos(j*.07f)};
+ auto ref=x;fft.fft(x,false);fft.fft(x,true);
+ for(int j=0;j<512;++j)check(std::abs(x[j]-ref[j])<2e-5f,"creative FFT roundtrip");
+ double error=0,energy=0;
+ for(int j=0;j<4096;++j){float in=.3f*std::sin(j*.123f);float v[2]={in,in};fft.tick(v,80,.5f,0,false,48000);if(j>=1536){float expected=.3f*std::sin((j-512)*.123f);error+=std::abs(v[0]-expected);energy+=std::abs(expected);}}
+ check(error/std::max(energy,1e-9)<1e-4,"WOLA reconstruction with 512 sample latency");
+ for(double sr:{44100.,48000.,96000.,192000.})for(int type=79;type<cosmos::fxTypes;++type){
+  cosmos::FxSlotState s;s.prepare(sr);cosmos::FxParams p;p.enabled=true;p.type=type;p.a=.72f;p.b=.76f;p.sync=true;
+  std::array<float,8> m{};double total=0,diff=0;
+  for(int j=0;j<int(sr*.3);++j){float dry=.32f*std::sin(j*.064f)+.15f*std::sin(j*.171f),l=dry,r=.22f*std::cos(j*.091f);s.tick(l,r,p,sr,m);check(std::isfinite(l)&&std::isfinite(r)&&std::abs(l)<=4.01f&&std::abs(r)<=4.01f,"creative finite bounded");if(j>int(sr*.15)){total+=std::abs(l)+std::abs(r);diff+=std::abs(l-dry);}}
+  check(total>1e-4&&diff>1e-4,"creative processes audio");
+  p.enabled=false;for(int j=0;j<2048;++j){float l=.2f,r=.3f;s.tick(l,r,p,sr,m);if(j==2047)check(l==.2f&&r==.3f,"creative bypass");}
+ }
  }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }

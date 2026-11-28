@@ -5,8 +5,9 @@
 #include <vector>
 #include <numbers>
 #include <cstdint>
+#include "CosmosCreativeFX.h"
 namespace cosmos {
-constexpr int fxRacks=5,fxSlots=8,fxTypes=79;
+constexpr int fxRacks=5,fxSlots=8,fxTypes=101;
 struct FxParams{int type=0;bool enabled=false;float mix=1,input=1,output=1,a=.5f,b=.5f;int macro=0;float depth=0;bool autoGain=false;int quality=0,cc=-1;float ccValue=-1;bool sync=false;float stereo=.5f;double bpm=120;float delayFeedbackR=.5f,delayTone=.75f;bool delayFreeze=false;};
 struct FxRack{bool parallel=false;std::array<FxParams,fxSlots> slots{};};
 inline float analogShape(int type,float x,float a,float b)noexcept{
@@ -292,10 +293,10 @@ struct ReverbState{
 };
 
 struct FxSlotState{
- int type=0;float wet=0;std::array<float,2> low{},dc{},env{};float phase=0,reduction=0;std::array<float,2> low2{},previous{},fastEnv{},slowEnv{};std::array<float,3> bandEnv{};float linkedEnv=0;FxSpaceState space;EchoState echo;ReverbState reverb;
- void prepare(double sr=48000){space.prepare();echo.prepare(sr);reverb.prepare(sr);clear();wet=0;type=0;}
+ int type=0;float wet=0;std::array<float,2> low{},dc{},env{};float phase=0,reduction=0;std::array<float,2> low2{},previous{},fastEnv{},slowEnv{};std::array<float,3> bandEnv{};float linkedEnv=0;FxSpaceState space;EchoState echo;ReverbState reverb;CreativeState creative;
+ void prepare(double sr=48000){space.prepare();echo.prepare(sr);reverb.prepare(sr);creative.prepare(sr);clear();wet=0;type=0;}
  void reset()noexcept{clear();wet=0;type=0;}
- void clear()noexcept{low={};dc={};env={};low2={};previous={};fastEnv={};slowEnv={};bandEnv={};linkedEnv=0;phase=0;reduction=0;space.reset();echo.reset();reverb.reset();}
+ void clear()noexcept{low={};dc={};env={};low2={};previous={};fastEnv={};slowEnv={};bandEnv={};linkedEnv=0;phase=0;reduction=0;space.reset();echo.reset();reverb.reset();creative.reset();}
  bool active(const FxParams& p)const noexcept{return (p.enabled&&p.type>0)||wet>0;}
  void tick(float& l,float& r,const FxParams& p,double sr,const std::array<float,8>& macros)noexcept{
   if(!active(p)){reduction=0;return;}const int desired=p.enabled?std::clamp(p.type,0,fxTypes-1):0;
@@ -324,6 +325,7 @@ struct FxSlotState{
     }
     reduction=std::max(0.f,-20*std::log10(std::max(gain,1e-6f)));if(p.autoGain&&type>=9&&type<=13){float makeup=std::min(4.f,std::pow(1/std::max(threshold,.001f),(1-1/ratio)*.25f));for(auto& x:v)x*=makeup;}
   }
+  else if(type>=79){creative.tick(v,type,a,b,p.sync,p.bpm,p.delayFreeze,sr);space.phase=creative.activity;}
   else if(type>=64){reverb.tick(v,type,a,b,p,sr);space.phase=reverb.activity;}
   else if(type>=49){echo.tick(v,type,a,b,p,sr);space.phase=echo.phase;}
   else if(type>=29){space.tick(v,type,a,b,p.stereo,p.sync,p.bpm,sr);}
