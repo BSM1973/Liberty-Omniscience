@@ -171,6 +171,7 @@ public:
     }
     std::array<float,matrixCount> matrixValues()const noexcept{for(const auto& a:v)if(a.active)return a.routeView;return {};}
     std::array<float,lfoCount> lfoPhases()const noexcept{for(const auto& a:v)if(a.active)return a.lfoPhaseView;std::array<float,lfoCount> result;result.fill(-1);return result;}
+    float fxReduction(int rack,int slot)const noexcept{return fxState[rack].slots[slot].reduction;}
     bool voiceActive(int index)const noexcept{return index>=0&&index<voices&&v[size_t(index)].active;}
     std::array<float,2> nexusPosition()const noexcept{return {nexusMotion.x,nexusMotion.y};}
     std::array<float,4> nexusGains(bool power)const noexcept{return nexusMotion.weights(power);}
