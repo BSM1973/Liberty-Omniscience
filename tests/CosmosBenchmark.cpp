@@ -15,7 +15,17 @@ int modulationBenchmark(){
     std::sort(times.begin(),times.end());std::cout<<(mode?"64_routes":"inactive")<<','<<notes<<','<<blocks*n/sr<<','<<sum/blocks<<','<<times[size_t(.95*(blocks-1))]<<','<<times[size_t(.99*(blocks-1))]<<','<<times.back()<<','<<misses<<','<<finite<<','<<peak<<'\n';if(!finite)return 1;
   }return 0;
 }
-int main(int argc,char** argv){if(argc>1&&std::string(argv[1])=="--modulation")return modulationBenchmark();
+int nexusBenchmark(bool longRun){
+ std::cout<<"scenario,backend,sample_rate,block,voices,seconds,mean_budget_pct,p95,p99,max,misses,finite,peak\n";
+ auto run=[&](int n,double sr,double seconds,bool fast,bool hd){auto e=std::make_unique<cosmos::Engine>();e->prepare(sr);cosmos::Patch p;p.experimentalNexusShared=fast;p.nexus.enabled=true;p.nexus.power=true;p.morph.enabled=true;p.morph.amount=.65f;p.experimentalGrouped=true;p.experimentalTiled=true;p.experimentalInterpolation=2;
+ for(int j=0;j<8;++j){p.lfo[j].mode=1;p.lfo[j].rate=.3f+j*.11f;}for(int j=0;j<12;++j){p.modEnv[j].free.enabled=true;p.modEnv[j].play=1;p.modEnv[j].segmentTime=.15f;}for(int j=0;j<64;++j)p.matrix[j]={true,j<20?j+1:j<40?155+j%8:j<56?163+j%2:21+j%6,3+j%2,j%5,0,.0125f};p.macros.fill(.65f);
+ if(hd)for(auto& l:p.layer)for(int o=0;o<5;++o){auto& x=l.osc[o];x.mode=cosmos::OscMode::wavetable;x.tableSource=1;x.level=o==0?1.f:.1f;x.unison=16;x.detune=15;x.morph=.4f;}
+ for(int j=0;j<32;++j)e->noteOn(0,40+j,.7f);std::vector<float> l(n),r(n);int blocks=std::max(1,int(std::ceil(seconds*sr/n)));std::vector<double> times;times.reserve(blocks);double sum=0;int misses=0;bool finite=true;float peak=0;
+ for(int j=0;j<blocks;++j){p.nexus.x=.5f+.45f*std::sin(float(j)*.013f);p.nexus.y=.5f+.45f*std::cos(float(j)*.017f);std::fill(l.begin(),l.end(),0);std::fill(r.begin(),r.end(),0);auto start=std::chrono::steady_clock::now();e->render(l.data(),r.data(),n,p);double cost=100*std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count()/(n/sr);times.push_back(cost);sum+=cost;misses+=cost>100;for(int i=0;i<n;++i){finite&=std::isfinite(l[i])&&std::isfinite(r[i]);peak=std::max({peak,std::abs(l[i]),std::abs(r[i])});}}
+ std::sort(times.begin(),times.end());std::cout<<(hd?"hd20_unison16":"nexus_morph_matrix")<<','<<(fast?"shared":"reference")<<','<<sr<<','<<n<<",32,"<<blocks*n/sr<<','<<sum/blocks<<','<<times[size_t(.95*(blocks-1))]<<','<<times[size_t(.99*(blocks-1))]<<','<<times.back()<<','<<misses<<','<<finite<<','<<peak<<std::endl;return finite;};
+ bool ok=true;if(longRun){ok&=run(128,48000,600,true,false);}else{for(double sr:{44100.,48000.,96000.,192000.})for(int n:{64,128,256,512,1024})for(bool fast:{false,true})ok&=run(n,sr,.10,fast,false);for(bool fast:{false,true}){ok&=run(128,48000,1,fast,true);ok&=run(128,48000,60,fast,false);}}return ok?0:1;
+}
+int main(int argc,char** argv){if(argc>1&&std::string(argv[1])=="--nexus")return nexusBenchmark(false);if(argc>1&&std::string(argv[1])=="--nexus-long")return nexusBenchmark(true);if(argc>1&&std::string(argv[1])=="--modulation")return modulationBenchmark();
   constexpr int n=128;constexpr double sr=48000.;const bool longRun=argc>1&&std::string(argv[1])=="--long";const int blocks=longRun?22500:375;
   auto engine=std::make_unique<cosmos::Engine>();auto& e=*engine;e.prepare(sr);
   std::vector<float> l(n),r(n);

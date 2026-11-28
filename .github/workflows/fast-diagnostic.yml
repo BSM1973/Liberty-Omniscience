@@ -3,6 +3,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      nexus_long:
+        description: 'Run optional 10-minute rendered NEXUS endurance'
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -108,6 +113,25 @@ jobs:
             ./build/CosmosBenchmark --modulation > cosmos-modulation-performance.csv
           fi
           cat cosmos-modulation-performance.csv
+      - name: NEXUS shared vs reference and 60-second endurance
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            ./build/Release/CosmosBenchmark.exe --nexus > cosmos-nexus-performance.csv
+          else
+            ./build/CosmosBenchmark --nexus > cosmos-nexus-performance.csv
+          fi
+          cat cosmos-nexus-performance.csv
+      - name: Optional NEXUS 10-minute endurance
+        if: github.event_name == 'workflow_dispatch' && inputs.nexus_long
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            ./build/Release/CosmosBenchmark.exe --nexus-long > cosmos-nexus-long.csv
+          else
+            ./build/CosmosBenchmark --nexus-long > cosmos-nexus-long.csv
+          fi
+          cat cosmos-nexus-long.csv
       - uses: actions/upload-artifact@v4
         with:
           name: Cosmos-benchmark-${{ matrix.name }}
@@ -115,6 +139,8 @@ jobs:
             cosmos-benchmark.csv
             cosmos-endurance.csv
             cosmos-modulation-performance.csv
+            cosmos-nexus-performance.csv
+            cosmos-nexus-long.csv
           if-no-files-found: error
       - name: Package macOS development binaries
         if: runner.os == 'macOS'
@@ -145,12 +171,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
         with:
-          name: Omniscience-v0.6.5-macOS-ARM64
+          name: Omniscience-v0.6.6-macOS-ARM64
           path: Omniscience-macOS-ARM64.zip
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
-          name: Omniscience-v0.6.5-Windows-x64
+          name: Omniscience-v0.6.6-Windows-x64
           path: Omniscience-Windows-x64.zip
           if-no-files-found: error

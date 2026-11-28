@@ -447,5 +447,14 @@ int main(){
  {
  for(int mode=0;mode<7;++mode){cosmos::MutationRng a(4711),b(4711);for(int f=0;f<8;++f)for(int i=0;i<128;++i){float v=i/127.f;auto x=cosmos::mutationValue(v,1,mode,f,a),y=cosmos::mutationValue(v,1,mode,f,b);check(x==y&&x>=0&&x<=1,"deterministic bounded mutation");check(cosmos::mutationValue(v,0,mode,f,a)==v,"zero mutation");(void)cosmos::mutationValue(v,0,mode,f,b);}}
  }
+ {
+  for(int n:{64,128,512,1024,1536}){auto a=std::make_unique<cosmos::Engine>(),b=std::make_unique<cosmos::Engine>();a->prepare(48000);b->prepare(48000);cosmos::Patch p;p.nexus.enabled=true;p.nexus.power=true;p.nexus.smooth=30;p.morph.enabled=true;p.morph.amount=.6f;p.layer[1].cutoff=2000;p.layer[2].osc[0].morph=.7f;
+  for(int j=0;j<8;++j){p.lfo[j].mode=j%3;p.lfo[j].division=3;p.lfo[j].rate=.2f+j;p.lfo[j].depth=.15f;p.lfo[j].destination=3;}
+  for(int j=0;j<64;++j){p.matrix[j]={true,j%2?163+j%2:155+j%8,3+j%2,j%5,0,.02f};if(j<20)p.matrix[j].source=j+1;else if(j<28)p.matrix[j].source=21+j%8;}
+  p.macros.fill(.7f);p.transportValid=true;p.bpm=123;p.ppq=2.5;
+  for(int j=0;j<8;++j){a->noteOn(0,48+j,.7f);b->noteOn(0,48+j,.7f);}a->controller(0,1,65);b->controller(0,1,65);
+  for(int block=0;block<8;++block){p.nexus.x=block/7.f;p.nexus.y=1-p.nexus.x;auto ref=p;ref.experimentalNexusShared=false;std::vector<float> l(n),r(n),ll(n),rr(n);a->render(l.data(),r.data(),n,p);b->render(ll.data(),rr.data(),n,ref);for(int i=0;i<n;++i)check(std::abs(l[i]-ll[i])<1e-6f&&std::abs(r[i]-rr[i])<1e-6f,"shared NEXUS/MORPH/LFO/matrix A/B");p.ppq+=n*123./(48000.*60);}
+  }
+ }
  std::cout<<"Cosmos foundation, hybrid, granular, HD, grouped, tiled, SIMD interpolation and Hann A/B tests passed\n";
 }
